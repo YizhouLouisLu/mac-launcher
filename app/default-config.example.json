@@ -1,0 +1,253 @@
+{
+  "autoExpandSnippets": true,
+  "engines": [
+    {
+      "keyword": "g",
+      "name": "Google",
+      "urlTemplate": "https://www.google.com/search?q={query}"
+    },
+    {
+      "keyword": "bing",
+      "name": "Bing",
+      "urlTemplate": "https://www.bing.com/search?q={query}"
+    },
+    {
+      "keyword": "gh",
+      "name": "GitHub",
+      "urlTemplate": "https://github.com/search?q={query}"
+    },
+    {
+      "keyword": "arxiv",
+      "name": "arXiv",
+      "urlTemplate": "https://arxiv.org/search/?query={query}&searchtype=all"
+    },
+    {
+      "keyword": "inspire",
+      "name": "INSPIRE-HEP",
+      "urlTemplate": "https://inspirehep.net/search?q={query}"
+    },
+    {
+      "keyword": "scholar",
+      "name": "Google Scholar",
+      "urlTemplate": "https://scholar.google.com/scholar?q={query}"
+    },
+    {
+      "keyword": "wiki",
+      "name": "维基百科",
+      "urlTemplate": "https://zh.wikipedia.org/w/index.php?search={query}"
+    }
+  ],
+  "hotKey": "option+space",
+  "maxResults": 12,
+  "searchFolders": [
+    "~/Desktop",
+    "~/Documents",
+    "~/Downloads",
+    "~/Library/Mathematica"
+  ],
+  "searchHomeFolder": true,
+  "showInDock": true,
+  "snippetInjection": "type",
+  "snippets": [
+    {
+      "content": "${cursor}$",
+      "keyword": "\\$",
+      "name": "$"
+    },
+    {
+      "content": "\\mathrm{d}",
+      "keyword": "\\D ",
+      "name": "\\D"
+    },
+    {
+      "content": "Poincar\\'e",
+      "keyword": "\\Poincare",
+      "name": "Poincare"
+    },
+    {
+      "content": "\\mathrm{T}\\overline{\\mathrm{T}}",
+      "keyword": "\\TTbar",
+      "name": "TTbar"
+    },
+    {
+      "content": "\\left|{cursor}\\right|",
+      "keyword": "\\abs",
+      "name": "absolute"
+    },
+    {
+      "content": "\\begin{aligned}\n{cursor}\n\\end{aligned}",
+      "keyword": "\\aed",
+      "name": "aligned"
+    },
+    {
+      "content": "\\begin{align}\n{cursor}\n\\end{align}",
+      "keyword": "\\align",
+      "name": "align"
+    },
+    {
+      "content": "\\begin{aligned}\n{cursor}\n\\end{aligned}",
+      "keyword": "\\baligned",
+      "name": "aligned"
+    },
+    {
+      "content": "\\bar{{cursor}}",
+      "keyword": "\\bar",
+      "name": "bar"
+    },
+    {
+      "content": "\\boldsymbol{{cursor}}",
+      "keyword": "\\bds",
+      "name": "boldsymbol"
+    },
+    {
+      "content": "\\braket{{cursor}}",
+      "keyword": "\\bk",
+      "name": "braket"
+    },
+    {
+      "content": "\\begin{bmatrix}\n{cursor}\n\\end{bmatrix}",
+      "keyword": "\\bmatrix",
+      "name": "bmatrix"
+    },
+    {
+      "content": "\\bra{{cursor}}",
+      "keyword": "\\bra",
+      "name": "bra"
+    },
+    {
+      "content": "\\begin{cases}\n{cursor}\n\\end{cases}",
+      "keyword": "\\cases",
+      "name": "cases"
+    },
+    {
+      "content": "\\dot{{cursor}}",
+      "keyword": "\\dot",
+      "name": "dot"
+    },
+    {
+      "content": "\\mathrm{e}",
+      "keyword": "\\ee",
+      "name": "\\e"
+    },
+    {
+      "content": "\\frac{{cursor}}{}",
+      "keyword": "\\frac",
+      "name": "frac"
+    },
+    {
+      "content": "\\mathrm{i}",
+      "keyword": "\\ii",
+      "name": "imaginary unit"
+    },
+    {
+      "content": "\\ket{{cursor}}",
+      "keyword": "\\ket",
+      "name": "ket"
+    },
+    {
+      "content": "\\llbracket {cursor} \\rrbracket",
+      "keyword": "\\llb",
+      "name": "llbracket"
+    },
+    {
+      "content": "\\left(\n{cursor}\n\\right)",
+      "keyword": "\\lr(",
+      "name": "lr()"
+    },
+    {
+      "content": "\\left[\n{cursor}\n\\right]",
+      "keyword": "\\lr[",
+      "name": "lr[]"
+    },
+    {
+      "content": "\\left\\langle {cursor} \\right\\rangle",
+      "keyword": "\\lrangle",
+      "name": "lrangle"
+    },
+    {
+      "content": "\\left\\{\n{cursor}\n\\right\\}",
+      "keyword": "\\lr{",
+      "name": "lr{}"
+    },
+    {
+      "content": "\\mathbb{{cursor}}",
+      "keyword": "\\mbb",
+      "name": "mathbb"
+    },
+    {
+      "content": "\\mathbf{{cursor}}",
+      "keyword": "\\mbf",
+      "name": "mathbf"
+    },
+    {
+      "content": "\\mathcal{{cursor}}",
+      "keyword": "\\mcal",
+      "name": "mathcal"
+    },
+    {
+      "content": "M_{\\rm Pl}",
+      "keyword": "\\mpl",
+      "name": "mpl"
+    },
+    {
+      "content": "\\mathring{{cursor}}",
+      "keyword": "\\mring",
+      "name": "mathring"
+    },
+    {
+      "content": "\\mathrm{{cursor}}",
+      "keyword": "\\mrm",
+      "name": "mathrm"
+    },
+    {
+      "content": "\\mathsf{{cursor}}",
+      "keyword": "\\msf",
+      "name": "mathsf"
+    },
+    {
+      "content": "\\mathbi{\\tiny {cursor}}",
+      "keyword": "\\mtiny",
+      "name": "mathbi tiny"
+    },
+    {
+      "content": "\\partial ",
+      "keyword": "\\pd",
+      "name": "partial derivative"
+    },
+    {
+      "content": "\\mathscr{{cursor}}",
+      "keyword": "\\scr",
+      "name": "scr"
+    },
+    {
+      "content": "\\sqrt{{cursor}}",
+      "keyword": "\\sqrt",
+      "name": "sqrt"
+    },
+    {
+      "content": "\\mathrm{Tr}\\left[{cursor}\\right]",
+      "keyword": "\\tr",
+      "name": "Trace"
+    },
+    {
+      "content": "^{{cursor}}",
+      "keyword": "^{",
+      "name": "^{}"
+    },
+    {
+      "content": "_{{cursor}}",
+      "keyword": "_{",
+      "name": "_{}"
+    },
+    {
+      "content": "\\mathfrak{{cursor}}",
+      "keyword": "\\mfk",
+      "name": "\\mathfrak"
+    },
+    {
+      "content": "you@example.com",
+      "keyword": ";mail",
+      "name": "my mail"
+    }
+  ]
+}
