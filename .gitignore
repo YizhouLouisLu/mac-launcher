@@ -1,0 +1,29 @@
+# 构建产物
+app/build/
+spike/build/
+spike-objc/build/
+dist/stage/
+
+# 发布包走 GitHub Releases，不进版本库（二进制文件不适合用 git 管理）
+dist/*.dmg
+
+# macOS 杂项
+.DS_Store
+._*
+*.ips
+*.crash
+
+# Xcode / 编辑器
+DerivedData/
+xcuserdata/
+*.xcuserstate
+.idea/
+.vscode/
+
+# 本地配置与日志（正常情况下在 ~/Library 下，这里只作保险）
+config.local.json
+launcher.log
+
+# 打包时使用的「本机真实配置」：含个人信息，不进版本库；
+# 仓库里放的是脱敏的 default-config.example.json。
+app/default-config.json
