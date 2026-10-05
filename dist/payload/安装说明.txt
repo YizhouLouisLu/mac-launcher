@@ -1,0 +1,52 @@
+MacLauncher 安装说明
+====================
+
+适用：Apple Silicon（M 系列）Mac，macOS 13 或更高。
+不支持：Intel 芯片的 Mac（二进制只有 arm64 切片）。
+
+
+安装（三步）
+------------
+1. 双击「安装 MacLauncher.command」。
+   若系统提示「无法打开，因为来自身份不明的开发者」，请右键该文件 → 打开 → 仍要打开。
+   （安装器脚本本身需要终端，这是正常现象。）
+2. 安装器会把 App 放到 ~/Applications，注册为登录时自启，并首次启动它。
+3. 在弹出的「系统设置 → 隐私与安全性 → 辅助功能」里勾选 MacLauncher。
+   这一步只有一次；不勾选的话，片段自动展开无法工作（其他功能不受影响）。
+
+
+装完即可用
+----------
+· 热键：⌥Space 唤出面板（可在设置里改）。输入应用名/文件名 → 回车启动或打开。
+· 片段：在任意 App 里键入关键词就会自动展开，例如
+      \mcal → \mathcal{|}      \align → 三行 align 环境（光标在中间行）
+      \frac → \frac{|}{}       ;mail → 你的邮箱
+  关键词以符号开头（\ ; 等）才会自动展开；内容里的 {cursor} 表示展开后光标的位置。
+· 网络搜索：g 关键词 / bing / gh / arxiv / inspire / scholar / wiki
+· 退出应用：q 应用名（⌘↩ 强制退出）
+· 设置：面板里输入「设置」回车（或 Dock 图标右键 → 设置…），可管理
+  片段、搜索引擎、搜索范围、全局热键；保存后立即生效，无需重启。
+
+
+自带内容
+--------
+· 40 个 LaTeX 片段（从 Alfred 迁移）、7 个搜索引擎、搜索范围为整个家目录（自动排除缓存等噪声）。
+· 这些只是「首次运行的默认值」：如果 iCloud Drive 里已有
+  MacLauncher/config.json，首次启动会采用时间更新的那一份，多台 Mac 共用同一份配置。
+· 本机配置路径：~/Library/Application Support/MacLauncher/config.json
+· 日志：~/Library/Application Support/MacLauncher/launcher.log
+
+
+卸载
+----
+rm -rf ~/Applications/MacLauncher.app \
+       ~/Library/LaunchAgents/com.luyizhou.maclauncher.plist
+若还要清掉配置与片段：
+rm -rf ~/Library/Application\ Support/MacLauncher
+
+
+已知限制
+--------
+· 仅按文件名搜索文件/文件夹，不搜索文件内容。
+· 需要在 Apple 芯片上运行；外置硬盘上的文件默认不在搜索范围内（可在设置 → 搜索范围里添加）。
+· 辅助功能授权与「完全磁盘访问」无关，不需要额外授权。
