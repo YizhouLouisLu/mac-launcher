@@ -7,7 +7,7 @@
 # the snippets, engines and search scope configured here.
 set -euo pipefail
 
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-0.2.1}"
 
 # SANITIZED=1 builds the package for a public release: the bundled default config is the
 # sanitized app/default-config.example.json instead of this machine's real config (which holds

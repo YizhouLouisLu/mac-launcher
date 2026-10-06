@@ -677,3 +677,62 @@ let mode = text.contains("\n") ? "paste" : injectionMode
   并重建两个标签；强制推送。备份留在 `/tmp/mac-launcher-pre-rewrite.bundle`。
 - 核验：全历史文本命中 `luyz@`/姓名/家目录/端口/持仓 **全为 0**；
   **匿名下载**（不带凭据）Release 附件，sha256 与本地脱敏包一致，挂载后包内配置无个人信息。
+
+## 26. Bug：INSPIRE 搜索丢查询词 + 单独输入引擎词无提示（2026-10-06）
+
+**现象**：输入 `inspire` 后下拉里没有网页搜索选项；搜出来的内容是错的。
+
+**根因（实测跟随跳转）**：INSPIRE 的旧地址
+`https://inspirehep.net/search?q={query}` 会 **302 到 `/literature?q=` 并丢掉查询串** ——
+所以用户看到的不是报错，而是**无查询的结果页**，看起来就像"搜错了"。
+对照：`https://inspirehep.net/literature?q=holography` 保留查询 ✓。
+（arxiv、GitHub、Bing、Scholar、维基 实测落点均正确，问题只在这一条。）
+
+**两处修复**：
+1. 引擎地址改为 `https://inspirehep.net/literature?q={query}`；并在 `Config.load()` 加
+   **一次性迁移**（`brokenEngineURLs`），让已经有旧地址的机器（含用户其它 Mac）自动修正，
+   而不是只有全新安装才对。
+2. 单独输入引擎关键词时也给出选项：对含 `{query}` 的引擎，下拉显示
+   「用 X 搜索…」，回车打开该引擎的搜索页（`Indexer.engineBaseURL` 去掉 `{query}` 并清理悬空的 `?`/`&`/`=`）。
+   直达模式（模板不含 `{query}`）行为不变。
+
+**验证**：坏地址自动迁移 ✓；`inspire`/`g`/`arxiv` 单独输入均出现选项 ✓；
+带词搜索的 URL 保留查询词 ✓；误伤检查 `insp`/`g2`/`inspirex`/`hello` 仍为正常结果、不产生网页行 ✓。
+
+**过程教训（又一次工具性错误）**：我在仓库根目录用了 `./build/MacLauncher`（正确路径是
+`./app/build/MacLauncher`），于是整批验证脚本以 exit 127 静默失败、输出全空，
+一度让我以为"功能整体坏了"。**测试脚本要先断言被测二进制存在**。
+
+## 27. 网页搜索行置顶 + INSPIRE 作者检索（2026-10-06）
+
+**置顶规则**（`Indexer.prependActions`，即时绘制与异步合并共用同一处逻辑）：
+
+1. 用户明确写了引擎关键词 → **网页行永远第一**（这是"我要搜网页"的明确意图，精确匹配的 App 也让位）；
+2. 没写引擎关键词 → 用 `defaultEngineKeyword`（默认 `g`）生成一行，位置在**精确匹配行之下**
+   （精确匹配同时看标题与 `alternateTitles`，所以 `设置`、`Slack`、片段关键词都能保住回车）；
+3. 然后才是词典行、股票行、普通结果。股票行由 `Palette.withStocks` 插在"顶部网页行之后"，
+   不会压过网页行；
+4. 明确意图排除默认行：`st `/纯数字（股票）与 `d `/`英 `（词典）不再附默认引擎行，
+   否则会把用户点名的行压到下面。
+
+**新增 `ia` 引擎**（INSPIRE 作者检索）：`https://inspirehep.net/authors?q={query}`。
+实测该地址**不跳转、查询词保留** ✓（与 `/search?q=` 丢参数的旧坑相反）。
+另外 `inspire a 王` 也可用：INSPIRE 的老语法经 `/literature?q=a%20王` 同样保留查询词（实测），
+不过其结果正确性无法用 curl 验证（INSPIRE 结果由 JS 渲染）。
+
+**标题文案**：中文引擎名不加两侧空格（「用维基百科搜索「黑洞」」），拉丁名保留（「用 arXiv 搜索…」）。
+
+**验证**：`inspire holography`/`g holography`/`ia 王` 网页行第一 ✓；
+`holography` 默认 Google 行第一、词典第二 ✓；`Safari`/`Slack` 应用行在其上 ✓；
+`设置` 命令行第一 ✓；`d electron` 词典行第一 ✓；`wiki 黑洞` 文案无多余空格 ✓。
+
+### 27.1 一个机制性坑：旧实例会抹掉新增的配置字段
+
+排查中发现 `defaultEngineKeyword` 一度从**本地**配置消失（而共享副本还有）：
+
+**原因**：`Config` 的 Codable 解码**忽略未知字段**，而正在运行的进程是**加该字段之前编译的旧构建**。
+它把配置读进内存（丢掉新字段）、随后任何一次写回（reconcile adopt、自选变更）都会把字段
+**静默写没**。共享副本没丢，是因为那是我的脚本直接写的。
+
+**规程**：给 `Config` 增字段时，**先安装新构建再去改配置**（顺序反了就会出现这种"字段自己消失"）。
+验证方式：写入后重启 App，等待若干秒再查一次字段是否仍在——本次确认新构建下字段稳定 ✓。

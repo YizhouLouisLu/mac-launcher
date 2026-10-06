@@ -1,5 +1,6 @@
 {
   "autoExpandSnippets": true,
+  "defaultEngineKeyword": "g",
   "engines": [
     {
       "keyword": "g",
@@ -24,7 +25,7 @@
     {
       "keyword": "inspire",
       "name": "INSPIRE-HEP",
-      "urlTemplate": "https://inspirehep.net/search?q={query}"
+      "urlTemplate": "https://inspirehep.net/literature?q={query}"
     },
     {
       "keyword": "scholar",
@@ -40,6 +41,11 @@
       "keyword": "gzt",
       "name": "本地看板",
       "urlTemplate": "http://127.0.0.1:<port>/#home"
+    },
+    {
+      "keyword": "ia",
+      "name": "INSPIRE 作者",
+      "urlTemplate": "https://inspirehep.net/authors?q={query}"
     }
   ],
   "hotKey": "option+space",
