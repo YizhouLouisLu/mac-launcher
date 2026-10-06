@@ -7,7 +7,7 @@
 # the snippets, engines and search scope configured here.
 set -euo pipefail
 
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.2.0}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/app"
 DIST="$ROOT/dist"

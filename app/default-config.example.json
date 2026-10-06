@@ -35,6 +35,11 @@
       "keyword": "wiki",
       "name": "维基百科",
       "urlTemplate": "https://zh.wikipedia.org/w/index.php?search={query}"
+    },
+    {
+      "keyword": "gzt",
+      "name": "本地看板",
+      "urlTemplate": "http://127.0.0.1:<port>/#home"
     }
   ],
   "hotKey": "option+space",
@@ -249,5 +254,9 @@
       "keyword": ";mail",
       "name": "my mail"
     }
+  ],
+  "stockWatchlist": [
+    "sh600519",
+    "usAAPL"
   ]
 }
