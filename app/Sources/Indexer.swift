@@ -197,14 +197,91 @@ final class Indexer {
 
     /// Splits the optional "quit"/"q" prefix from a raw query. Single source of truth
     /// for both the search path and the UI's action decision.
-    static func parse(_ rawQuery: String) -> (quitMode: Bool, query: String) {
+    static func parse(_ rawQuery: String) -> (quitMode: Bool, query: String, dictionaryPrefix: Bool) {
         let trimmed = rawQuery.trimmed()
         let lower = trimmed.lowercased()
-        if lower.hasPrefix("quit ") { return (true, String(trimmed.dropFirst(5)).trimmed()) }
-        if lower == "quit" { return (true, "") }
-        if lower.hasPrefix("q ") { return (true, String(trimmed.dropFirst(2)).trimmed()) }
-        if lower == "q" { return (true, "") }
-        return (false, trimmed)
+        if lower.hasPrefix("quit ") { return (true, String(trimmed.dropFirst(5)).trimmed(), false) }
+        if lower == "quit" { return (true, "", false) }
+        if lower.hasPrefix("q ") { return (true, String(trimmed.dropFirst(2)).trimmed(), false) }
+        if lower == "q" { return (true, "", false) }
+        // `d <word>` (or `英 <word>`) forces a dictionary lookup even when the word also
+        // matches applications or files, where the automatic gloss is not enough.
+        for prefix in ["d ", "dict ", "英 "] {
+            if lower.hasPrefix(prefix) {
+                return (false, String(trimmed.dropFirst(prefix.count)).trimmed(), true)
+            }
+        }
+        return (false, trimmed, false)
+    }
+
+    /// The stock lookup a query asks for, if any.
+    ///
+    /// Explicit prefixes (`st `/`股 `) always trigger; a bare 5–6 digit code does too. Ordinary
+    /// words never do — otherwise every word typed would fire a suggest request.
+    /// An empty string means "the user asked for the watchlist itself".
+    static func stockQuery(for rawQuery: String) -> String? {
+        let trimmed = rawQuery.trimmed()
+        guard !trimmed.isEmpty else { return nil }
+        let lower = trimmed.lowercased()
+        if ["自选", "自选股", "自选股票"].contains(trimmed) { return "" }
+        for prefix in ["st ", "股 "] where lower.hasPrefix(prefix) {
+            return String(trimmed.dropFirst(prefix.count)).trimmed()
+        }
+        if ["st", "股", "stock"].contains(lower) { return "" }
+        if (5...6).contains(trimmed.count), trimmed.allSatisfy({ $0.isNumber }) { return trimmed }
+        return nil
+    }
+
+    /// Dropdown rows for stocks. Quotes may be missing (still loading), in which case the row
+    /// says so rather than showing a stale or invented price.
+    static func stockItems(hits: [StockSymbol], quotes: [String: StockQuote]) -> [Item] {
+        hits.map { hit in
+            let code = "\(hit.plainCode) · \(hit.market.rawValue)"
+            let subtitle: String
+            if let quote = quotes[hit.code] {
+                subtitle = "\(code) · \(quote.priceText)  \(quote.changeText)"
+            } else {
+                subtitle = "\(code) · 行情加载中…"
+            }
+            return Item(title: hit.name,
+                        subtitle: subtitle,
+                        path: "",
+                        kind: .stock,
+                        alternateTitles: [hit.plainCode, hit.code.lowercased()],
+                        url: "stock://\(hit.code)")
+        }
+    }
+
+    /// The single row shown for a bare `st`: open the watchlist.
+    static func watchlistItem(count: Int) -> Item {
+        Item(title: "打开自选股票",
+             subtitle: count == 0 ? "自选为空 —— 先搜索股票，回车即可加入" : "共 \(count) 只，显示实时行情与走势",
+             path: "",
+             kind: .stock,
+             alternateTitles: ["自选"],
+             url: "stock://watchlist")
+    }
+
+    /// The word whose entry should be offered for this query, if any.
+    static func dictionaryWord(rawQuery: String) -> String? {
+        let parsed = parse(rawQuery)
+        guard !parsed.quitMode, !parsed.query.isEmpty else { return nil }
+        if parsed.dictionaryPrefix { return parsed.query }
+        return Dictionary.isCandidate(parsed.query) ? parsed.query : nil
+    }
+
+    /// Builds the dictionary row: the word, its brief gloss, and `dict://` for the detail
+    /// window. Placed first, unless a row already matches the query exactly — typing an
+    /// application's exact name must keep launching it with Return.
+    private static func dictionaryRow(rawQuery: String, ranked: [Item]) -> Item? {
+        guard let word = dictionaryWord(rawQuery: rawQuery),
+              let entry = Dictionary.lookUp(word) else { return nil }
+        return Item(title: "词典：\(entry.headword)",
+                    subtitle: entry.brief,
+                    path: "",
+                    kind: .dictionary,
+                    alternateTitles: [entry.headword],
+                    url: "dict://\(entry.headword)")
     }
 
     static func quitMode(for rawQuery: String) -> Bool {
@@ -213,15 +290,39 @@ final class Indexer {
 
     // MARK: - search
 
-    /// Builds the "search the web" row for a `<engine keyword> <query>` input. Only an
-    /// exact keyword match counts, so ordinary typing is never hijacked by a search row.
+    /// Builds the web row for an engine keyword. Two modes, decided by the URL template:
+    ///
+    ///   * template contains `{query}` — search mode: `<keyword> <text>` searches.
+    ///   * template has no `{query}`   — direct mode: `<keyword>` alone opens that page,
+    ///     which is what a fixed destination (mail, notifications, dashboard) needs.
+    ///
+    /// Only an exact keyword match counts, so ordinary typing is never hijacked.
     private static func webSearchItem(for rawQuery: String, engines: [SearchEngine]) -> Item? {
         let trimmed = rawQuery.trimmed()
-        guard let separator = trimmed.firstIndex(of: " ") else { return nil }
-        let keyword = String(trimmed[trimmed.startIndex..<separator]).lowercased()
-        let query = String(trimmed[trimmed.index(after: separator)...]).trimmed()
-        guard !keyword.isEmpty, !query.isEmpty,
+        guard !trimmed.isEmpty else { return nil }
+
+        let separator = trimmed.firstIndex(of: " ")
+        let keyword = String(separator.map { trimmed[trimmed.startIndex..<$0] } ?? Substring(trimmed)).lowercased()
+        let query = separator.map { String(trimmed[trimmed.index(after: $0)...]).trimmed() } ?? ""
+        guard !keyword.isEmpty,
               let engine = engines.first(where: { $0.keyword.lowercased() == keyword }) else { return nil }
+
+        let isDirect = !engine.urlTemplate.contains("{query}")
+        if isDirect {
+            // Extra text after a direct keyword is treated as an ordinary search instead of
+            // being silently discarded.
+            guard query.isEmpty else { return nil }
+            let url = engine.urlTemplate.trimmed()
+            guard !url.isEmpty else { return nil }
+            return Item(title: "打开 \(engine.name)",
+                        subtitle: "\(engine.keyword) · \(url)",
+                        path: url,
+                        kind: .webSearch,
+                        alternateTitles: [engine.keyword],
+                        url: url)
+        }
+
+        guard !query.isEmpty else { return nil }
         // `urlQueryAllowed` alone leaves & = + ? # unescaped, which would let a query
         // containing them inject extra URL parameters, so those are removed.
         var allowed = CharacterSet.urlQueryAllowed
@@ -256,14 +357,17 @@ final class Indexer {
                           needle: parsed.query.lowercased(),
                           quitMode: parsed.quitMode,
                           limit: config.maxResults)
-        // A web search is an action, so it is offered above the ordinary matches.
+        // Actions (dictionary, web search) are offered above the ordinary matches.
+        var withActions = ranked
+        if let dictionary = Indexer.dictionaryRow(rawQuery: rawQuery, ranked: ranked) {
+            let exactFirst = ranked.first.map { $0.searchTitle == parsed.query.lowercased() } ?? false
+            withActions.insert(dictionary, at: exactFirst ? min(1, withActions.count) : 0)
+        }
         if !parsed.quitMode,
            let search = Indexer.webSearchItem(for: rawQuery, engines: config.engines) {
-            var withSearch = ranked
-            withSearch.insert(search, at: 0)
-            return Array(withSearch.prefix(config.maxResults))
+            withActions.insert(search, at: 0)
         }
-        return ranked
+        return Array(withActions.prefix(config.maxResults))
     }
 
     /// Merges Spotlight file paths with the app results so both compete on one score
@@ -313,19 +417,22 @@ final class Indexer {
         }
         candidates.append(contentsOf: appCandidates)
 
-        // The instant paint may already have contributed a web-search row; keep exactly one.
-        candidates.removeAll { $0.kind == .webSearch }
+        // The instant paint may already have contributed action rows; keep exactly one of each.
+        candidates.removeAll { $0.kind == .webSearch || $0.kind == .dictionary }
         let ranked = rank(candidates,
                           needle: parsed.query.lowercased(),
                           quitMode: parsed.quitMode,
                           limit: config.maxResults)
+        var withActions = ranked
+        if let dictionary = Indexer.dictionaryRow(rawQuery: rawQuery, ranked: ranked) {
+            let exactFirst = ranked.first.map { $0.searchTitle == parsed.query.lowercased() } ?? false
+            withActions.insert(dictionary, at: exactFirst ? min(1, withActions.count) : 0)
+        }
         if !parsed.quitMode,
            let search = Indexer.webSearchItem(for: rawQuery, engines: config.engines) {
-            var withSearch = ranked
-            withSearch.insert(search, at: 0)
-            return Array(withSearch.prefix(config.maxResults))
+            withActions.insert(search, at: 0)
         }
-        return ranked
+        return Array(withActions.prefix(config.maxResults))
     }
 
     private func rank(_ candidates: [Item], needle: String, quitMode: Bool, limit: Int) -> [Item] {

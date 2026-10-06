@@ -38,6 +38,9 @@ enum AppPaths {
     }
 
     static var logURL: URL { supportDirectory.appendingPathComponent("launcher.log") }
+
+    /// Query history: runtime state, deliberately not part of config.json.
+    static var historyURL: URL { supportDirectory.appendingPathComponent("history.json") }
 }
 
 // MARK: - logging

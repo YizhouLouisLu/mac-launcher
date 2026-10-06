@@ -697,14 +697,20 @@ final class SettingsWindowController: NSObject {
         }
         let template = engineURLField.stringValue
         var notes: [String] = []
-        if !template.contains("{query}") {
-            notes.append("⚠️ URL 里没有 {query}，查询词会被丢弃")
-        }
         if !template.lowercased().hasPrefix("http") {
             notes.append("⚠️ URL 不像 http(s) 链接")
         }
-        let sample = template.replacingOccurrences(of: "{query}", with: "test%20query")
-        enginePreviewLabel.stringValue = (notes + ["示例：\(sample)"]).joined(separator: "\n")
+        // The two modes are a property of the template, so say which one this engine is.
+        let mode: String
+        let sample: String
+        if template.contains("{query}") {
+            mode = "搜索模式：面板输入「\(engineKeywordField.stringValue) 关键词」才会搜索"
+            sample = template.replacingOccurrences(of: "{query}", with: "test%20query")
+        } else {
+            mode = "直达模式：面板输入「\(engineKeywordField.stringValue)」直接打开该网页"
+            sample = template
+        }
+        enginePreviewLabel.stringValue = (notes + [mode, "示例：\(sample)"]).joined(separator: "\n")
     }
 
     /// Writes the edited fields of the selected engine back into the in-memory list.

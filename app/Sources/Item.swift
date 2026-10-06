@@ -8,6 +8,8 @@ enum ItemKind: String {
     case snippet = "snippet"
     case command = "command"
     case webSearch = "web"
+    case dictionary = "dict"
+    case stock = "stock"
 }
 
 /// One searchable row.

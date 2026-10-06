@@ -46,6 +46,118 @@ if arguments.contains("--reconcile-test") {
     exit(0)
 }
 
+if let index = arguments.firstIndex(of: "--engine-set"), index + 3 < arguments.count {
+    let engines = Config.setEngine(keyword: arguments[index + 1],
+                                   name: arguments[index + 2],
+                                   urlTemplate: arguments[index + 3])
+    print("# 引擎 \"" + arguments[index + 1] + "\" -> " + arguments[index + 3])
+    print("# 现有引擎: " + engines.map { $0.keyword }.joined(separator: ", "))
+    exit(0)
+}
+
+if let index = arguments.firstIndex(of: "--stock-watch"), index + 1 < arguments.count {
+    // Each invocation is its own process, which is the strongest test that the on-disk
+    // read-modify-write accumulates instead of dropping what was there before.
+    for symbol in arguments[index + 1].split(separator: ",").map(String.init) {
+        if symbol.hasPrefix("-") {
+            print("# 移除 \(symbol.dropFirst()) -> \(Config.setWatched(String(symbol.dropFirst()), watched: false))")
+        } else {
+            print("# 加入 \(symbol) -> \(Config.setWatched(symbol, watched: true))")
+        }
+    }
+    exit(0)
+}
+
+if arguments.contains("--stock-watch-list") {
+    print("# 自选: \(Config.watchlist())")
+    exit(0)
+}
+
+if let index = arguments.firstIndex(of: "--stock-search"), index + 1 < arguments.count {
+    let query = arguments[index + 1]
+    let started = Date()
+    let hits = StockSearch.suggest(query)
+    print("# 联想「\(query)」 \(Int(Date().timeIntervalSince(started) * 1000))ms，\(hits.count) 条")
+    for hit in hits { print("  \(hit.market.rawValue)\t\(hit.code)\t\(hit.name)") }
+    if !hits.isEmpty {
+        let quotes = StockQuotes.fetch(hits.map { $0.code })
+        print("# 行情（一次批量请求）")
+        for hit in hits {
+            guard let quote = quotes[hit.code] else { print("  \(hit.code)\t(无行情)"); continue }
+            print("  \(quote.name)\t\(quote.priceText)\t\(quote.changeText)\t\(quote.updated)")
+        }
+    }
+    exit(0)
+}
+
+if let index = arguments.firstIndex(of: "--stock-quote"), index + 1 < arguments.count {
+    let symbols = arguments[index + 1].split(separator: ",").map(String.init)
+    let started = Date()
+    let quotes = StockQuotes.fetch(symbols)
+    print("# 行情 \(symbols.count) 只 \(Int(Date().timeIntervalSince(started) * 1000))ms")
+    for symbol in symbols {
+        guard let quote = quotes[symbol] else { print("  \(symbol)\t(无数据)"); continue }
+        print("  \(symbol)\t\(quote.name)\t现价 \(quote.priceText)\t昨收 \(quote.previousClose)\t\(quote.changeText)\t\(quote.updated)")
+    }
+    exit(0)
+}
+
+if let index = arguments.firstIndex(of: "--stock-trend"), index + 1 < arguments.count {
+    let symbol = arguments[index + 1]
+    let started = Date()
+    guard let trend = StockTrends.fetch(symbol) else { print("# \(symbol) 分时无数据"); exit(0) }
+    print("# \(symbol) 分时 \(Int(Date().timeIntervalSince(started) * 1000))ms  日期 \(trend.date)  昨收 \(trend.previousClose)  根数 \(trend.points.count)")
+    if let first = trend.points.first, let last = trend.points.last {
+        print("  首根 \(first.minute / 60):\(String(format: "%02d", first.minute % 60)) \(first.price)   末根 \(last.minute / 60):\(String(format: "%02d", last.minute % 60)) \(last.price)")
+    }
+    exit(0)
+}
+
+if let index = arguments.firstIndex(of: "--stock-kline"), index + 1 < arguments.count {
+    let symbol = arguments[index + 1]
+    let started = Date()
+    let bars = StockKLine.fetch(symbol)
+    print("# \(symbol) 日K \(Int(Date().timeIntervalSince(started) * 1000))ms  根数 \(bars.count)")
+    for bar in bars.suffix(3) {
+        print("  \(bar.date)  开\(bar.open) 收\(bar.close) 高\(bar.high) 低\(bar.low)")
+    }
+    exit(0)
+}
+
+if arguments.contains("--history-test") {
+
+    let history = QueryHistory.shared
+    history.clear()
+    for query in ["设置", "g holography", "entanglement", "设置"] { history.record(query) }
+    print("# 记录 4 次（其中「设置」重复）后，最新在前: \(history.entries)")
+    var back: [String] = []
+    while let entry = history.stepBack() { back.append(entry) }
+    print("# 连按 ↑ 依次得到: \(back)")
+    var forward: [String] = []
+    for _ in 0..<5 { forward.append(history.stepForward()) }
+    print("# 连按 ↓ 依次得到: \(forward.map { $0.isEmpty ? "「空」" : $0 })")
+    history.clear()
+    for index in 1...60 { history.record("q\(index)") }
+    print("# 记录 60 条后保留 \(history.entries.count) 条，最旧的是 \(history.entries.last ?? "-")")
+    print("# 持久化文件存在: \(FileManager.default.fileExists(atPath: AppPaths.historyURL.path))")
+    exit(0)
+}
+
+if let index = arguments.firstIndex(of: "--define"), index + 1 < arguments.count {
+    let word = arguments[index + 1]
+    print("# define \"\(word)\"  candidate=\(Dictionary.isCandidate(word))")
+    if let entry = Dictionary.lookUp(word) {
+        print("headword : \(entry.headword)")
+        print("phonetics: \(entry.phonetics)")
+        print("brief    : \(entry.brief)")
+        print("---- formatted ----")
+        print(Dictionary.format(entry.body))
+    } else {
+        print("(无词条 —— 可能是拼音撞车或词典未收录)")
+    }
+    exit(0)
+}
+
 if arguments.contains("--hotkey-test") {
     let samples = ["option+space", "ctrl+option+space", "cmd+shift+k", "ctrl+space", "cmd+space",
                    "f5", "shift+f5", "cmd+shift+p", "a", "cmd+spacebar", "ctrl+alt+delete",

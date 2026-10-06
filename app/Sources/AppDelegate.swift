@@ -109,7 +109,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.applyActivationPolicy()
         }
 
-        if let index = CommandLine.arguments.firstIndex(of: "--render-settings"),
+        if let index = CommandLine.arguments.firstIndex(of: "--render-stock") {
+            let path = (index + 1 < CommandLine.arguments.count) ? CommandLine.arguments[index + 1] : "/tmp/stock.png"
+            let symbol = (index + 2 < CommandLine.arguments.count) ? CommandLine.arguments[index + 2] : nil
+            let appearance: NSAppearance.Name = CommandLine.arguments.contains("--light") ? .aqua : .darkAqua
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                let mode: StockChartView.Mode = CommandLine.arguments.contains("--daily") ? .daily : .intraday
+                StockWindowController.shared.renderToPNG(path: path, symbol: symbol,
+                                                        appearanceName: appearance, mode: mode)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { NSApp.terminate(nil) }
+            }
+        } else if CommandLine.arguments.contains("--stock-selftest") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                let passed = StockWindowController.shared.selfTestEscape()
+                print("stock window selftest: \(passed ? "PASSED" : "FAILED")")
+                NSApp.terminate(nil)
+            }
+        } else if CommandLine.arguments.contains("--palette-selftest") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                let result = self.palette.selfTestResignKey()
+                let passed = result.hidden
+                Log.write("palette selftest: resignKey=\(result.resigned) notified=\(result.notified) hidden=\(result.hidden) -> \(passed ? "PASSED" : "FAILED")")
+                print("palette selftest: 面板可见=\(result.resigned) 系统通知=\(result.notified) 已隐藏=\(result.hidden) -> \(passed ? "PASSED" : "FAILED")")
+                NSApp.terminate(nil)
+            }
+        } else if let index = CommandLine.arguments.firstIndex(of: "--dictionary-selftest") {
+            let word = (index + 1 < CommandLine.arguments.count) ? CommandLine.arguments[index + 1] : "electron"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                let passed = DictionaryWindowController.shared.selfTest(word: word)
+                let menuHasClose = NSApp.mainMenu?.items
+                    .compactMap { $0.submenu?.items }
+                    .flatMap { $0 }
+                    .contains { $0.keyEquivalent.lowercased() == "w" } ?? false
+                Log.write("dictionary selftest: \(passed ? "PASSED" : "FAILED"); menu has ⌘W item: \(menuHasClose)")
+                print("dictionary selftest: \(passed ? "PASSED" : "FAILED");  主菜单里有 ⌘W 项: \(menuHasClose)")
+                NSApp.terminate(nil)
+            }
+        } else if let index = CommandLine.arguments.firstIndex(of: "--render-dictionary"),
+           index + 2 < CommandLine.arguments.count {
+            let path = CommandLine.arguments[index + 1]
+            let word = CommandLine.arguments[index + 2]
+            let appearance: NSAppearance.Name = CommandLine.arguments.contains("--light") ? .aqua : .darkAqua
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                DictionaryWindowController.shared.renderToPNG(path: path, word: word, appearanceName: appearance)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
+            }
+        } else if let index = CommandLine.arguments.firstIndex(of: "--render-settings"),
            index + 1 < CommandLine.arguments.count {
             let path = CommandLine.arguments[index + 1]
             let tab = (index + 2 < CommandLine.arguments.count) ? Int(CommandLine.arguments[index + 2]) ?? 0 : 0
@@ -290,6 +335,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
         appMenuItem.submenu = appMenu
+
+        // ⌘W comes from the File menu's Close item, which this app did not have — so ⌘W did
+        // nothing in the dictionary window (or the settings window) even though both are
+        // closable. `performClose:` targets the key window through the responder chain.
+        let fileMenuItem = NSMenuItem()
+        mainMenu.addItem(fileMenuItem)
+        let fileMenu = NSMenu(title: "File")
+        let closeItem = NSMenuItem(title: "Close Window",
+                                   action: #selector(NSWindow.performClose(_:)),
+                                   keyEquivalent: "w")
+        fileMenu.addItem(closeItem)
+        fileMenuItem.submenu = fileMenu
 
         let editMenuItem = NSMenuItem()
         mainMenu.addItem(editMenuItem)

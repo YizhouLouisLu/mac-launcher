@@ -106,6 +106,8 @@ final class PaletteController: NSObject {
     static let fieldHeight: CGFloat = 58
     static let rowHeight: CGFloat = 46
     static let footerHeight: CGFloat = 26
+    /// Height of the dictionary gloss strip under the search field, when shown.
+    static let glossHeight: CGFloat = 34
     static let cornerRadius: CGFloat = 14
     static let maxVisibleRows = 8
     static let fileSearchDebounce = 0.15
@@ -128,6 +130,16 @@ final class PaletteController: NSObject {
     private let searchIcon = NSImageView()
     private let separator = NSBox()
     private let emptyLabel = NSTextField(labelWithString: "没有匹配的结果")
+    private let glossStrip = FlippedView()
+    private let glossWordLabel = NSTextField(labelWithString: "")
+    private let glossBodyLabel = NSTextField(labelWithString: "")
+    private var glossVisible = false
+    /// Stock rows live apart from the app/file results so the async refresh can
+    /// replace them without disturbing the merged list underneath.
+    private var stockItems: [Item] = []
+    private var stockSearchGeneration = 0
+    /// True while Up/Down are stepping through query history instead of rows.
+    private var browsingHistory = false
     private let footerLabel = NSTextField(labelWithString: "")
     private let hintLabel = NSTextField(labelWithString: "↑↓ 选择   ↵ 打开   ⎋ 关闭")
     private let searchField = NSTextField()
@@ -151,6 +163,13 @@ final class PaletteController: NSObject {
         )
         super.init()
         configurePanel()
+        // Clicking anywhere outside the palette (another app, the desktop, the menu bar)
+        // makes the panel resign key; that is the signal to dismiss it. Until now the only
+        // way out was Esc.
+        NotificationCenter.default.addObserver(self,
+                                               selector: #selector(panelDidResignKey),
+                                               name: NSWindow.didResignKeyNotification,
+                                               object: panel)
         NSWorkspace.shared.notificationCenter.addObserver(self,
                                                          selector: #selector(applicationDidActivate(_:)),
                                                          name: NSWorkspace.didActivateApplicationNotification,
@@ -162,6 +181,27 @@ final class PaletteController: NSObject {
         if app.bundleIdentifier != Bundle.main.bundleIdentifier {
             lastOtherApp = app
         }
+    }
+
+    @objc private func panelDidResignKey() {
+        guard panel.isVisible else { return }
+        Log.write("palette resigned key (focus moved elsewhere) -> hiding")
+        hide(restoringFocus: false)
+    }
+
+    /// Regression check for the dismiss-on-click-elsewhere path: `resignKey()` first, and if
+    /// AppKit does not post the notification in this synthetic setting, the notification is
+    /// posted directly so at least the observer wiring is covered.
+    func selfTestResignKey() -> (resigned: Bool, notified: Bool, hidden: Bool) {
+        show()
+        guard panel.isVisible else { return (false, false, false) }
+        panel.resignKey()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        if !panel.isVisible { return (true, true, true) }
+
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: panel)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        return (true, false, !panel.isVisible)
     }
 
     // MARK: - setup
@@ -209,6 +249,17 @@ final class PaletteController: NSObject {
 
         separator.boxType = .separator
         content.addSubview(separator)
+
+        // Brief gloss under the search field: shown while a single English word is typed.
+        glossStrip.isHidden = true
+        glossWordLabel.font = .systemFont(ofSize: 13.5, weight: .semibold)
+        glossWordLabel.lineBreakMode = .byTruncatingTail
+        glossBodyLabel.font = .systemFont(ofSize: 12)
+        glossBodyLabel.textColor = .secondaryLabelColor
+        glossBodyLabel.lineBreakMode = .byTruncatingTail
+        glossStrip.addSubview(glossWordLabel)
+        glossStrip.addSubview(glossBodyLabel)
+        content.addSubview(glossStrip)
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
         column.width = PaletteController.panelWidth
@@ -270,6 +321,8 @@ final class PaletteController: NSObject {
             previousApp = lastOtherApp
         }
         searchField.stringValue = ""
+        browsingHistory = false
+        QueryHistory.shared.stopBrowsing()
         pendingQuery = nil
         lastSearchedQuery = nil
         // Re-overlay live running state: an app started after our launch is otherwise
@@ -316,7 +369,9 @@ final class PaletteController: NSObject {
 
     private func updatePanelSize() {
         let rows = max(1, min(results.count, PaletteController.maxVisibleRows))
+        let gloss = glossVisible ? PaletteController.glossHeight : 0
         let height = PaletteController.fieldHeight
+            + gloss
             + CGFloat(rows) * PaletteController.rowHeight
             + PaletteController.footerHeight
         var frame = panel.frame
@@ -332,10 +387,15 @@ final class PaletteController: NSObject {
         content.frame = NSRect(x: 0, y: 0, width: width, height: height)
         searchIcon.frame = NSRect(x: 20, y: (fieldHeight - 22) / 2, width: 22, height: 22)
         searchField.frame = NSRect(x: 50, y: (fieldHeight - 28) / 2, width: width - 70, height: 28)
-        separator.frame = NSRect(x: 0, y: fieldHeight - 1, width: width, height: 1)
+        separator.frame = NSRect(x: 0, y: fieldHeight + gloss - 1, width: width, height: 1)
+        glossStrip.frame = NSRect(x: 0, y: fieldHeight, width: width, height: gloss)
+        // Strip-local coordinates: using the panel's y here pushed the labels down into the
+        // first result row (caught by the offscreen render, not by reading the code).
+        glossWordLabel.frame = NSRect(x: 20, y: (gloss - 20) / 2, width: 150, height: 20)
+        glossBodyLabel.frame = NSRect(x: 178, y: (gloss - 18) / 2, width: width - 198, height: 18)
         let listHeight = CGFloat(rows) * PaletteController.rowHeight
-        scrollView.frame = NSRect(x: 0, y: fieldHeight, width: width, height: listHeight)
-        emptyLabel.frame = NSRect(x: 0, y: fieldHeight + listHeight / 2 - 9, width: width, height: 18)
+        scrollView.frame = NSRect(x: 0, y: fieldHeight + gloss, width: width, height: listHeight)
+        emptyLabel.frame = NSRect(x: 0, y: fieldHeight + gloss + listHeight / 2 - 9, width: width, height: 18)
         footerLabel.frame = NSRect(x: 18, y: height - PaletteController.footerHeight + 6, width: width / 2, height: 14)
         hintLabel.frame = NSRect(x: width / 2, y: height - PaletteController.footerHeight + 6, width: width / 2 - 18, height: 14)
         tableView.tableColumns.first?.width = width
@@ -408,10 +468,54 @@ final class PaletteController: NSObject {
 
     private func reloadResults() {
         let query = searchField.stringValue
+        refreshGloss(for: query)
         appResults = indexer.searchApps(rawQuery: query, config: config)
-        results = appResults
+        stockItems = cachedStockItems(for: query)
+        results = stockItems + appResults
         refreshTable()
         scheduleFileSearch(for: query)
+        scheduleStockSearch(for: query)
+    }
+
+    /// Cache-only stock rows: the main thread must never wait on the network, so this shows
+    /// what is already known and the background refresh corrects it a moment later.
+    private func cachedStockItems(for query: String) -> [Item] {
+        guard let term = Indexer.stockQuery(for: query) else { return [] }
+        guard !term.isEmpty else { return [Indexer.watchlistItem(count: config.stockWatchlist.count)] }
+        guard let hits = StockSearch.cachedSuggest(term), !hits.isEmpty else { return [] }
+        let quotes = StockQuotes.cached(hits.map { $0.code }, maxAge: 30)
+        return Indexer.stockItems(hits: hits, quotes: quotes)
+    }
+
+    /// Debounced background lookup: suggest (to resolve names/pinyin/codes) then one batch
+    /// quote request for the prices shown in the dropdown.
+    private func scheduleStockSearch(for query: String) {
+        guard let term = Indexer.stockQuery(for: query) else {
+            if !stockItems.isEmpty { stockItems = [] }
+            return
+        }
+        stockSearchGeneration += 1
+        let generation = stockSearchGeneration
+        guard !term.isEmpty else { return }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + PaletteController.fileSearchDebounce) { [weak self] in
+            guard let self = self, self.stockSearchGeneration == generation else { return }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let hits = StockSearch.suggest(term)
+                let quotes = StockQuotes.fetch(hits.map { $0.code })
+                let items = Indexer.stockItems(hits: hits, quotes: quotes)
+                DispatchQueue.main.async {
+                    // `self` is already unwrapped by the outer guard; rebinding it here would
+                    // be a conditional binding on a non-optional (compiler error).
+                    guard self.stockSearchGeneration == generation,
+                          Indexer.stockQuery(for: self.searchField.stringValue) == term else { return }
+                    self.stockItems = items
+                    self.results = items + self.appResults
+                    self.refreshTable()
+                    Log.write("stock search \"\(term)\": \(hits.count) hits, \(quotes.count) quotes")
+                }
+            }
+        }
     }
 
     /// Spotlight is a separate process (~150–300 ms) so it is debounced and its results
@@ -437,7 +541,7 @@ final class PaletteController: NSObject {
                                                     apps: self.appResults,
                                                     filePaths: paths,
                                                     config: self.config)
-                    self.results = merged
+                    self.results = self.stockItems + merged
                     self.refreshTable()
                     Log.write("file search \"\(trimmed)\": \(paths.count) spotlight hits, \(merged.count) merged rows")
                 }
@@ -445,10 +549,39 @@ final class PaletteController: NSObject {
         }
     }
 
+    /// Looks the query up in the system dictionary and shows the brief gloss. Cheap enough
+    /// to run per keystroke (measured 2–3 ms) and silent when there is no entry.
+    private func refreshGloss(for query: String) {
+        let parsed = Indexer.parse(query)
+        var entry: DictionaryEntry?
+        if parsed.dictionaryPrefix, !parsed.query.isEmpty {
+            entry = Dictionary.lookUp(parsed.query)
+        } else if Dictionary.isCandidate(parsed.query) {
+            entry = Dictionary.lookUp(parsed.query)
+        }
+        if let entry = entry {
+            glossWordLabel.stringValue = entry.headword
+            glossBodyLabel.stringValue = entry.phonetics.isEmpty
+                ? entry.brief
+                : "\(entry.phonetics)   ·   \(entry.brief)"
+            glossStrip.isHidden = false
+            glossVisible = true
+        } else {
+            glossWordLabel.stringValue = ""
+            glossBodyLabel.stringValue = ""
+            glossStrip.isHidden = true
+            glossVisible = false
+        }
+    }
+
     private func refreshTable() {
         tableView.reloadData()
         emptyLabel.isHidden = !results.isEmpty
-        footerLabel.stringValue = results.isEmpty ? "" : "\(results.count) 个结果"
+        var footer = results.isEmpty ? "" : "\(results.count) 个结果"
+        if searchField.stringValue.trimmed().isEmpty, QueryHistory.shared.hasEntries {
+            footer += footer.isEmpty ? "↑ 调出上一次查询" : "  ·  ↑ 调出上一次查询"
+        }
+        footerLabel.stringValue = footer
         if results.isEmpty {
             tableView.deselectAll(nil)
         } else {
@@ -483,6 +616,7 @@ final class PaletteController: NSObject {
             NSSound.beep()
             return
         }
+        QueryHistory.shared.record(searchField.stringValue)
         let shouldQuit = forceQuit || Indexer.quitMode(for: searchField.stringValue)
         // The paste target is whoever was frontmost before the palette; hide() clears it.
         let pasteTarget = previousApp
@@ -499,6 +633,33 @@ final class PaletteController: NSObject {
             Log.write("snippet \"\(item.title)\" (\(content.count) chars) -> \(pasteTarget?.localizedName ?? "frontmost app")")
             Paster.paste(content, into: pasteTarget) { outcome in
                 Log.write("snippet outcome: \(outcome)")
+            }
+            return
+        }
+
+        if item.kind == .stock {
+            let target = item.url.flatMap { $0.hasPrefix("stock://") ? String($0.dropFirst(8)) : nil }
+            if let target = target, target != "watchlist" {
+                let watchlist = Config.setWatched(target, watched: true)
+                config = Config.load()          // keep in step with what is now on disk
+                Log.write("watchlist add \(target) (now \(watchlist.count): \(watchlist.joined(separator: ",")))")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    StockWindowController.shared.show(symbol: target)
+                }
+            } else {
+                Log.write("opening watchlist window")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    StockWindowController.shared.show(symbol: nil)
+                }
+            }
+            return
+        }
+
+        if item.kind == .dictionary {
+            let word = item.url.flatMap { $0.hasPrefix("dict://") ? String($0.dropFirst(7)) : nil } ?? item.title
+            Log.write("dictionary window requested for \(word)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                DictionaryWindowController.shared.show(word: word)
             }
             return
         }
@@ -570,11 +731,18 @@ final class PaletteController: NSObject {
     }
 
     private func icon(for item: Item) -> NSImage? {
-        if item.kind == .snippet || item.kind == .webSearch || item.kind == .command {
+        if item.kind == .snippet || item.kind == .webSearch || item.kind == .command
+            || item.kind == .dictionary || item.kind == .stock {
             let key = "__\(item.kind.rawValue)__"
             if let cached = iconCache[key] { return cached }
-            let symbolName = item.kind == .snippet ? "doc.on.clipboard"
-                : (item.kind == .webSearch ? "globe" : "command")
+            let symbolName: String
+            switch item.kind {
+            case .snippet: symbolName = "doc.on.clipboard"
+            case .webSearch: symbolName = "globe"
+            case .dictionary: symbolName = "character.book.closed"
+            case .stock: symbolName = "chart.line.uptrend.xyaxis"
+            default: symbolName = "command"
+            }
             let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil) ?? NSImage()
             image.size = NSSize(width: 28, height: 28)
             iconCache[key] = image
@@ -592,15 +760,44 @@ final class PaletteController: NSObject {
 
 extension PaletteController: NSTextFieldDelegate {
     func controlTextDidChange(_ notification: Notification) {
+        // A real keystroke ends history browsing; setting the field from history does not
+        // come through here, so the flag stays true while stepping.
+        browsingHistory = false
+        QueryHistory.shared.stopBrowsing()
+        reloadResults()
+    }
+
+    /// Puts a history entry (or the empty string) into the field and refreshes.
+    private func recall(_ query: String) {
+        searchField.stringValue = query
+        browsingHistory = !query.isEmpty
+        if query.isEmpty { QueryHistory.shared.stopBrowsing() }
         reloadResults()
     }
 
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         switch commandSelector {
         case #selector(NSResponder.moveUp(_:)):
+            // Up on an empty field (or while already browsing) recalls what was run before,
+            // the way Alfred does; with text in the field it keeps moving the row selection.
+            let wantsHistory = browsingHistory || searchField.stringValue.trimmed().isEmpty
+            if wantsHistory {
+                if let recalled = QueryHistory.shared.stepBack() {
+                    recall(recalled)
+                    return true
+                }
+                // Already at the oldest entry (or no history at all): consume the key rather
+                // than silently moving the row selection while the field is empty.
+                if browsingHistory { return true }
+            }
             moveSelection(-1)
             return true
         case #selector(NSResponder.moveDown(_:)):
+            if browsingHistory {
+                let next = QueryHistory.shared.stepForward()
+                recall(next)
+                return true
+            }
             moveSelection(1)
             return true
         case #selector(NSResponder.cancelOperation(_:)): // Esc
@@ -636,6 +833,8 @@ extension PaletteController: NSTableViewDataSource, NSTableViewDelegate {
         case .snippet: return "片段"
         case .command: return "命令"
         case .webSearch: return "网页"
+        case .dictionary: return "词典"
+        case .stock: return "股票"
         }
     }
 

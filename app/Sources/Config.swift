@@ -30,12 +30,14 @@ struct Config: Codable {
     var snippets: [Snippet]
     /// Alfred-style in-place expansion while typing in any application.
     var autoExpandSnippets: Bool
+    /// Watchlist symbols in feed spelling (`sh600519`, `hk00700`, `usAAPL`).
+    var stockWatchlist: [String] = []
     /// How expansion replaces the keyword: "type" (Unicode key events, default) or
     /// "paste" (clipboard + Cmd+V, slower but more compatible with odd targets).
     var snippetInjection: String
 
     enum CodingKeys: String, CodingKey {
-        case searchFolders, searchHomeFolder, maxResults, hotKey, showInDock, engines, snippets, autoExpandSnippets, snippetInjection
+        case searchFolders, searchHomeFolder, maxResults, hotKey, showInDock, engines, snippets, autoExpandSnippets, snippetInjection, stockWatchlist
     }
 
     init() {
@@ -93,6 +95,62 @@ struct Config: Codable {
         snippets = (try? container.decode([Snippet].self, forKey: .snippets)) ?? fallback.snippets
         autoExpandSnippets = (try? container.decode(Bool.self, forKey: .autoExpandSnippets)) ?? fallback.autoExpandSnippets
         snippetInjection = (try? container.decode(String.self, forKey: .snippetInjection)) ?? fallback.snippetInjection
+        stockWatchlist = (try? container.decode([String].self, forKey: .stockWatchlist)) ?? fallback.stockWatchlist
+    }
+
+    // MARK: - watchlist
+
+    /// Read-modify-write against the config file, then mirror immediately.
+    ///
+    /// The watchlist cannot be updated by rewriting an in-memory copy of the whole config:
+    /// that copy goes stale (the palette holds a snapshot, and the iCloud reconcile can
+    /// replace it mid-session), so each add silently dropped the previous entries — measured
+    /// as every add logging "now 1" and the file ending up with a single symbol.
+    @discardableResult
+    static func setWatched(_ symbol: String, watched: Bool) -> [String] {
+        var fresh = load()
+        if watched {
+            if !fresh.isWatched(symbol) { fresh.stockWatchlist.append(symbol) }
+        } else {
+            fresh.stockWatchlist.removeAll { $0.lowercased() == symbol.lowercased() }
+        }
+        write(fresh, to: AppPaths.localConfigURL)
+        mirrorToShared(fresh, synchronous: true)
+        return fresh.stockWatchlist
+    }
+
+    static func watchlist() -> [String] { load().stockWatchlist }
+
+    /// Same read-modify-write discipline as the watchlist: an engine edit must not be applied
+    /// by rewriting a possibly stale in-memory copy of the whole config.
+    @discardableResult
+    static func setEngine(keyword: String, name: String, urlTemplate: String) -> [SearchEngine] {
+        var fresh = load()
+        let engine = SearchEngine(keyword: keyword, name: name, urlTemplate: urlTemplate)
+        if let index = fresh.engines.firstIndex(where: { $0.keyword.lowercased() == keyword.lowercased() }) {
+            fresh.engines[index] = engine
+        } else {
+            fresh.engines.append(engine)
+        }
+        write(fresh, to: AppPaths.localConfigURL)
+        mirrorToShared(fresh, synchronous: true)
+        return fresh.engines
+    }
+
+    func isWatched(_ symbol: String) -> Bool {
+        stockWatchlist.contains { $0.lowercased() == symbol.lowercased() }
+    }
+
+    /// Adds or removes a symbol and writes the config back, so the watchlist follows the
+    /// same iCloud-synced path as snippets.
+    @discardableResult
+    mutating func toggleWatched(_ symbol: String) -> Bool {
+        if let index = stockWatchlist.firstIndex(where: { $0.lowercased() == symbol.lowercased() }) {
+            stockWatchlist.remove(at: index)
+        } else {
+            stockWatchlist.append(symbol)
+        }
+        return isWatched(symbol)
     }
 
     func jsonData() -> Data? {
@@ -152,8 +210,30 @@ struct Config: Codable {
 
     // MARK: - shared (iCloud, strictly off the startup path)
 
-    static func mirrorToShared(_ config: Config) {
+    /// Shared-config sync is skipped exactly when the local path is isolated but the shared
+    /// path is not — that combination is what once let a test config reach the real iCloud
+    /// copy. With both paths overridden (a fully isolated test) mirroring is safe and desired;
+    /// with neither, it is an ordinary run.
+    static var shouldSkipSharedSync: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["MACLAUNCHER_SUPPORT_DIR"] != nil
+            && environment["MACLAUNCHER_SHARED_CONFIG"] == nil
+    }
+
+    /// `synchronous` is for user-initiated edits (the watchlist): an async mirror can be lost
+    /// when the app or a CLI invocation exits immediately afterwards, which was measurable —
+    /// the scratch shared file never appeared because `exit(0)` won the race.
+    static func mirrorToShared(_ config: Config, synchronous: Bool = false) {
+        guard !shouldSkipSharedSync else {
+            Log.write("isolated local path without isolated shared path: not mirroring")
+            return
+        }
         let shared = AppPaths.sharedConfigURL
+        if synchronous {
+            write(config, to: shared)
+            Log.write("config mirrored to \(shared.path) (sync)")
+            return
+        }
         DispatchQueue.global(qos: .utility).async {
             write(config, to: shared)
             Log.write("config mirrored to \(shared.path)")
@@ -167,6 +247,10 @@ struct Config: Codable {
     /// silently reverted local edits (including the very config that had just been
     /// written). Timestamps make the outcome predictable.
     static func reconcileShared(local: Config, apply: @escaping (Config) -> Void) {
+        guard !shouldSkipSharedSync else {
+            Log.write("isolated local path without isolated shared path: skipping the iCloud reconcile")
+            return
+        }
         let shared = AppPaths.sharedConfigURL
         let localURL = AppPaths.localConfigURL
         DispatchQueue.global(qos: .utility).async {
