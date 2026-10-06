@@ -662,3 +662,18 @@ let mode = text.contains("\n") ? "paste" : injectionMode
 防线逻辑，却只跑了 `build.sh` 而没跑 `install.sh`，用户实际运行的仍是中间版本，
 于是 bug 又复现了一次。**验证必须针对「已安装的二进制」**（`~/Applications/...`），
 不是 `app/build/` 里的产物；两者时间戳不同就是信号。
+
+## 25. 公开仓库前的脱敏（2026-10-06）
+
+用户要求把仓库改为公开并脱敏。顺序是：**先做出脱敏安装包并替换 Release 附件，再改公开**，
+避免出现「公开仓库挂着含个人信息的包」的窗口期。
+
+- 打包脚本新增 `SANITIZED=1`：包内默认配置改用 `app/default-config.example.json`
+  （真实配置 `app/default-config.json` 仍由 .gitignore 排除）。忘记这一步曾经导致
+  含真实邮箱与持仓的包被发布。
+- 脱敏示例配置：邮箱 → `you@example.com`；自选 → `sh600519, usAAPL`；本地看板 URL → 占位符。
+- **历史也重写**（公开后历史同样可见）：文档 §23 里出现的两只个人标的代码用
+  `git filter-branch --tree-filter` 全历史替换，随后删除 `refs/original/*`、过期 reflog、gc，
+  并重建两个标签；强制推送。备份留在 `/tmp/mac-launcher-pre-rewrite.bundle`。
+- 核验：全历史文本命中 `luyz@`/姓名/家目录/端口/持仓 **全为 0**；
+  **匿名下载**（不带凭据）Release 附件，sha256 与本地脱敏包一致，挂载后包内配置无个人信息。
