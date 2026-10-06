@@ -214,6 +214,85 @@ final class Indexer {
         return (false, trimmed, false)
     }
 
+    /// The web row for a plain query, using the configured default engine. Placed after any
+    /// exact title match so that typing an application's name still launches it.
+    static func defaultWebSearchItem(for query: String, engines: [SearchEngine], defaultKeyword: String) -> Item? {
+        let trimmed = query.trimmed()
+        guard trimmed.count >= 2, !defaultKeyword.isEmpty,
+              let engine = engines.first(where: { $0.keyword.lowercased() == defaultKeyword.lowercased() }),
+              engine.urlTemplate.contains("{query}") else { return nil }
+        let url = engine.urlTemplate.replacingOccurrences(
+            of: "{query}",
+            with: trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed)
+        return Item(title: Indexer.searchTitle(engineName: engine.name, query: trimmed),
+                    subtitle: "\(engine.keyword) · \(url)",
+                    path: url,
+                    kind: .webSearch,
+                    alternateTitles: [engine.keyword],
+                    url: url)
+    }
+
+    /// Puts the action rows (web search above dictionary) on top of the ordinary results.
+    ///
+    /// An engine the user named explicitly always wins the first row — that is what typing a
+    /// keyword means. The default-engine row for plain queries keeps one exception: an exact
+    /// title match stays above it, so Return still launches the application.
+    static func prependActions(to ranked: [Item], rawQuery: String, config: Config) -> [Item] {
+        let parsed = parse(rawQuery)
+        guard !parsed.quitMode else { return ranked }
+
+        if let search = webSearchItem(for: rawQuery, engines: config.engines) {
+            var result = ranked
+            if let dictionary = dictionaryRow(rawQuery: rawQuery, ranked: ranked) {
+                result.insert(dictionary, at: 0)
+            }
+            result.insert(search, at: 0)
+            return result
+        }
+
+        var result = ranked
+        let needle = parsed.query.lowercased()
+        // Exact matches include alias hits: `设置` matches the settings command through its
+        // alternate titles, and that command must keep Return.
+        var insertAt = ranked.prefix { item in
+            item.searchTitle == needle || item.alternateTitles.contains { $0.lowercased() == needle }
+        }.count
+        // A stock query is an explicit intent (`st X` or a bare code), so the default-engine
+        // row must not sit above those rows.
+        // `d <word>` is an explicit dictionary request, so the default-engine row would sit on
+        // top of the very row the user asked for.
+        let isStockQuery = stockQuery(for: rawQuery) != nil
+        let isDictionaryQuery = parsed.dictionaryPrefix
+        if !isStockQuery, !isDictionaryQuery,
+           let fallback = defaultWebSearchItem(for: parsed.query,
+                                              engines: config.engines,
+                                              defaultKeyword: config.defaultEngineKeyword) {
+            result.insert(fallback, at: min(insertAt, result.count))
+            insertAt += 1
+        }
+        if let dictionary = dictionaryRow(rawQuery: rawQuery, ranked: ranked) {
+            result.insert(dictionary, at: min(insertAt, result.count))
+        }
+        return result
+    }
+
+    /// Chinese engine names read better without the surrounding spaces ("用维基百科搜索"), while
+    /// Latin names need them ("用 INSPIRE-HEP 搜索").
+    static func searchTitle(engineName: String, query: String?) -> String {
+        let isChinese = engineName.contains { !$0.isASCII }
+        let suffix = query.map { "搜索「\($0)」" } ?? "搜索…"
+        return isChinese ? "用\(engineName)\(suffix)" : "用 \(engineName) \(suffix)"
+    }
+
+    /// Strips `{query}` from a template to get the engine's own search page, dropping the
+    /// dangling `?`/`&`/`=` that would otherwise be left behind.
+    static func engineBaseURL(_ template: String) -> String? {
+        var base = template.replacingOccurrences(of: "{query}", with: "")
+        while let last = base.last, "?&=".contains(last) { base.removeLast() }
+        base = base.trimmed()
+        return base.isEmpty ? nil : base
+    }
+
     /// The stock lookup a query asks for, if any.
     ///
     /// Explicit prefixes (`st `/`股 `) always trigger; a bare 5–6 digit code does too. Ordinary
@@ -307,6 +386,18 @@ final class Indexer {
         guard !keyword.isEmpty,
               let engine = engines.first(where: { $0.keyword.lowercased() == keyword }) else { return nil }
 
+        // A search-mode engine with no text yet still shows an option: the engine keyword was
+        // typed on purpose, so the row appears at once and opens that engine's search page.
+        if query.isEmpty, engine.urlTemplate.contains("{query}") {
+            guard let base = Indexer.engineBaseURL(engine.urlTemplate) else { return nil }
+            return Item(title: Indexer.searchTitle(engineName: engine.name, query: nil),
+                        subtitle: "\(engine.keyword) · 继续输入关键词，直接回车打开 \(engine.name) 搜索页",
+                        path: base,
+                        kind: .webSearch,
+                        alternateTitles: [engine.keyword],
+                        url: base)
+        }
+
         let isDirect = !engine.urlTemplate.contains("{query}")
         if isDirect {
             // Extra text after a direct keyword is treated as an ordinary search instead of
@@ -329,7 +420,7 @@ final class Indexer {
         allowed.remove(charactersIn: "&=+?#")
         let encoded = query.addingPercentEncoding(withAllowedCharacters: allowed) ?? query
         let url = engine.urlTemplate.replacingOccurrences(of: "{query}", with: encoded)
-        return Item(title: "用 \(engine.name) 搜索「\(query)」",
+        return Item(title: Indexer.searchTitle(engineName: engine.name, query: query),
                     subtitle: "\(engine.keyword) · \(url)",
                     path: url,
                     kind: .webSearch,
@@ -358,16 +449,8 @@ final class Indexer {
                           quitMode: parsed.quitMode,
                           limit: config.maxResults)
         // Actions (dictionary, web search) are offered above the ordinary matches.
-        var withActions = ranked
-        if let dictionary = Indexer.dictionaryRow(rawQuery: rawQuery, ranked: ranked) {
-            let exactFirst = ranked.first.map { $0.searchTitle == parsed.query.lowercased() } ?? false
-            withActions.insert(dictionary, at: exactFirst ? min(1, withActions.count) : 0)
-        }
-        if !parsed.quitMode,
-           let search = Indexer.webSearchItem(for: rawQuery, engines: config.engines) {
-            withActions.insert(search, at: 0)
-        }
-        return Array(withActions.prefix(config.maxResults))
+        return Array(Indexer.prependActions(to: ranked, rawQuery: rawQuery, config: config)
+            .prefix(config.maxResults))
     }
 
     /// Merges Spotlight file paths with the app results so both compete on one score
@@ -423,16 +506,8 @@ final class Indexer {
                           needle: parsed.query.lowercased(),
                           quitMode: parsed.quitMode,
                           limit: config.maxResults)
-        var withActions = ranked
-        if let dictionary = Indexer.dictionaryRow(rawQuery: rawQuery, ranked: ranked) {
-            let exactFirst = ranked.first.map { $0.searchTitle == parsed.query.lowercased() } ?? false
-            withActions.insert(dictionary, at: exactFirst ? min(1, withActions.count) : 0)
-        }
-        if !parsed.quitMode,
-           let search = Indexer.webSearchItem(for: rawQuery, engines: config.engines) {
-            withActions.insert(search, at: 0)
-        }
-        return Array(withActions.prefix(config.maxResults))
+        return Array(Indexer.prependActions(to: ranked, rawQuery: rawQuery, config: config)
+            .prefix(config.maxResults))
     }
 
     private func rank(_ candidates: [Item], needle: String, quitMode: Bool, limit: Int) -> [Item] {

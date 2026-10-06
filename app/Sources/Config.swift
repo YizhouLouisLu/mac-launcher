@@ -30,6 +30,9 @@ struct Config: Codable {
     var snippets: [Snippet]
     /// Alfred-style in-place expansion while typing in any application.
     var autoExpandSnippets: Bool
+    /// Engine used for plain queries (no keyword typed); empty disables the row.
+    var defaultEngineKeyword: String
+
     /// Watchlist symbols in feed spelling (`sh600519`, `hk00700`, `usAAPL`).
     var stockWatchlist: [String] = []
     /// How expansion replaces the keyword: "type" (Unicode key events, default) or
@@ -37,7 +40,7 @@ struct Config: Codable {
     var snippetInjection: String
 
     enum CodingKeys: String, CodingKey {
-        case searchFolders, searchHomeFolder, maxResults, hotKey, showInDock, engines, snippets, autoExpandSnippets, snippetInjection, stockWatchlist
+        case searchFolders, searchHomeFolder, maxResults, hotKey, showInDock, engines, snippets, autoExpandSnippets, snippetInjection, stockWatchlist, defaultEngineKeyword
     }
 
     init() {
@@ -65,6 +68,7 @@ struct Config: Codable {
         snippets = []
         autoExpandSnippets = true
         snippetInjection = "type"
+        defaultEngineKeyword = "g"
     }
 
     /// Folders handed to `mdfind -onlyin`: the home directory (unless disabled) plus the
@@ -96,6 +100,7 @@ struct Config: Codable {
         autoExpandSnippets = (try? container.decode(Bool.self, forKey: .autoExpandSnippets)) ?? fallback.autoExpandSnippets
         snippetInjection = (try? container.decode(String.self, forKey: .snippetInjection)) ?? fallback.snippetInjection
         stockWatchlist = (try? container.decode([String].self, forKey: .stockWatchlist)) ?? fallback.stockWatchlist
+        defaultEngineKeyword = (try? container.decode(String.self, forKey: .defaultEngineKeyword)) ?? fallback.defaultEngineKeyword
     }
 
     // MARK: - watchlist
@@ -162,13 +167,37 @@ struct Config: Codable {
     // MARK: - local (startup path)
 
     /// Loads the local config, creating it on first run. Never touches iCloud.
+    /// Engine URLs that are known to be broken. INSPIRE's `/search?q=` redirects to
+    /// `/literature?q=` and **drops the query string**, so the page looked like a wrong result
+    /// set rather than an empty search (measured by following the redirect).
+    private static let brokenEngineURLs: [String: String] = [
+        "https://inspirehep.net/search?q={query}": "https://inspirehep.net/literature?q={query}"
+    ]
+
+    /// Repairs known-broken defaults, so the fix reaches machines that already have the old
+    /// URL in their config instead of only fresh installs.
+    private static func migrate(_ config: Config) -> Config {
+        var updated = config
+        var changed = false
+        for index in updated.engines.indices {
+            let template = updated.engines[index].urlTemplate
+            if let replacement = brokenEngineURLs[template] {
+                updated.engines[index].urlTemplate = replacement
+                changed = true
+                Log.write("migrated engine \(updated.engines[index].keyword): \(template) -> \(replacement)")
+            }
+        }
+        if changed { write(updated, to: AppPaths.localConfigURL) }
+        return updated
+    }
+
     static func load() -> Config {
         let local = AppPaths.localConfigURL
         if let data = try? Data(contentsOf: local) {
             do {
                 let config = try JSONDecoder().decode(Config.self, from: data)
                 Log.write("config loaded from \(local.path)")
-                return config
+                return migrate(config)
             } catch {
                 Log.write("config at \(local.path) could not be decoded (\(error)); using defaults")
                 return Config()

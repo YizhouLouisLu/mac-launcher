@@ -471,10 +471,19 @@ final class PaletteController: NSObject {
         refreshGloss(for: query)
         appResults = indexer.searchApps(rawQuery: query, config: config)
         stockItems = cachedStockItems(for: query)
-        results = stockItems + appResults
+        results = withStocks(appResults)
         refreshTable()
         scheduleFileSearch(for: query)
         scheduleStockSearch(for: query)
+    }
+
+    /// Stock rows sit under the top action row (a web search the user asked for), never above it.
+    private func withStocks(_ base: [Item]) -> [Item] {
+        guard !stockItems.isEmpty else { return base }
+        var result = base
+        let keepOnTop = base.prefix { $0.kind == .webSearch }.count
+        result.insert(contentsOf: stockItems, at: min(keepOnTop, result.count))
+        return result
     }
 
     /// Cache-only stock rows: the main thread must never wait on the network, so this shows
@@ -510,7 +519,7 @@ final class PaletteController: NSObject {
                     guard self.stockSearchGeneration == generation,
                           Indexer.stockQuery(for: self.searchField.stringValue) == term else { return }
                     self.stockItems = items
-                    self.results = items + self.appResults
+                    self.results = self.withStocks(self.appResults)
                     self.refreshTable()
                     Log.write("stock search \"\(term)\": \(hits.count) hits, \(quotes.count) quotes")
                 }
@@ -541,7 +550,7 @@ final class PaletteController: NSObject {
                                                     apps: self.appResults,
                                                     filePaths: paths,
                                                     config: self.config)
-                    self.results = self.stockItems + merged
+                    self.results = self.withStocks(merged)
                     self.refreshTable()
                     Log.write("file search \"\(trimmed)\": \(paths.count) spotlight hits, \(merged.count) merged rows")
                 }
