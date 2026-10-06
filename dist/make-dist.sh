@@ -8,6 +8,18 @@
 set -euo pipefail
 
 VERSION="${VERSION:-0.2.0}"
+
+# SANITIZED=1 builds the package for a public release: the bundled default config is the
+# sanitized app/default-config.example.json instead of this machine's real config (which holds
+# the real email and watchlist). Forgetting this once published a personal config.
+if [ "${SANITIZED:-0}" = "1" ]; then
+  REAL_DEFAULTS="$(dirname "$0")/../app/default-config.json"
+  if [ -f "$REAL_DEFAULTS" ]; then
+    mv "$REAL_DEFAULTS" "$REAL_DEFAULTS.sanitize-hold"
+    trap 'mv "$REAL_DEFAULTS.sanitize-hold" "$REAL_DEFAULTS" 2>/dev/null' EXIT
+  fi
+  echo "==> SANITIZED build: bundling app/default-config.example.json (no personal data)"
+fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/app"
 DIST="$ROOT/dist"
