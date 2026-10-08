@@ -95,9 +95,13 @@ enum Paster {
         }
 
         let pasteboard = NSPasteboard.general
-        let savedClipboard = pasteboard.string(forType: .string)
+        // Snapshot everything (not just the plain-text flavour): an image, a file reference or
+        // several items used to come back as an empty clipboard.
+        let snapshot = PasteboardSnapshot.capture(pasteboard)
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+        let ownership = pasteboard.changeCount
+        Log.write("paste: clipboard borrowed (was \(snapshot.summary))")
 
         activate(target)
         Log.write("paste: activating \(target.localizedName ?? "?") and waiting for focus")
@@ -106,14 +110,8 @@ enum Paster {
             postCommandV(to: target)
             Log.write("paste: posted Cmd+V to \(target.localizedName ?? "?")")
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                pasteboard.clearContents()
-                if let savedClipboard = savedClipboard {
-                    pasteboard.setString(savedClipboard, forType: .string)
-                    Log.write("paste: clipboard restored")
-                } else {
-                    Log.write("paste: clipboard cleared (there was no previous content)")
-                }
+            DispatchQueue.main.asyncAfter(deadline: .now() + PaletteController.clipboardRestoreDelay) {
+                snapshot.restore(to: pasteboard, ifUnchangedSince: ownership)
                 completion(.pasted)
             }
         }
@@ -248,9 +246,10 @@ enum Paster {
     static func pasteInPlace(_ text: String) {
         guard isTrusted else { return }
         let pasteboard = NSPasteboard.general
-        let savedClipboard = pasteboard.string(forType: .string)
+        let snapshot = PasteboardSnapshot.capture(pasteboard)
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+        let ownership = pasteboard.changeCount
 
         if let source = CGEventSource(stateID: .combinedSessionState),
            let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_V), keyDown: true),
@@ -261,11 +260,8 @@ enum Paster {
             up.post(tap: .cghidEventTap)
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            pasteboard.clearContents()
-            if let savedClipboard = savedClipboard {
-                pasteboard.setString(savedClipboard, forType: .string)
-            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + PaletteController.clipboardRestoreDelay) {
+            snapshot.restore(to: pasteboard, ifUnchangedSince: ownership)
         }
     }
 }

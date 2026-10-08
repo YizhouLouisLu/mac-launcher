@@ -106,6 +106,10 @@ final class PaletteController: NSObject {
     static let fieldHeight: CGFloat = 58
     static let rowHeight: CGFloat = 46
     static let footerHeight: CGFloat = 26
+    /// How long after borrowing the clipboard for a snippet we hand it back: long enough for
+    /// the target application to service the Cmd+V, short enough that the user does not notice.
+    static let clipboardRestoreDelay: TimeInterval = 0.4
+
     /// Height of the dictionary gloss strip under the search field, when shown.
     static let glossHeight: CGFloat = 34
     static let cornerRadius: CGFloat = 14

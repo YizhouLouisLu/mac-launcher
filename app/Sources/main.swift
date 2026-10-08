@@ -46,6 +46,63 @@ if arguments.contains("--reconcile-test") {
     exit(0)
 }
 
+if arguments.contains("--clipboard-test") {
+    // 1) 类型与多项保真：用自定义剪贴板，完全不碰用户的真实剪贴板
+    let board = NSPasteboard(name: NSPasteboard.Name("MacLauncherClipboardTest"))
+    let tiff = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 4,
+                                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                isPlanar: false, colorSpaceName: .deviceRGB,
+                                bytesPerRow: 0, bitsPerPixel: 0)?
+        .representation(using: .tiff, properties: [:]) ?? Data()
+    let first = NSPasteboardItem()
+    first.setString("原始文本", forType: .string)
+    first.setData(tiff, forType: .tiff)
+    let second = NSPasteboardItem()
+    second.setString("第二项", forType: .string)
+    board.clearContents()
+    board.writeObjects([first, second])
+
+    let snapshot = PasteboardSnapshot.capture(board)
+    let beforeItems = snapshot.itemCount, beforeTypes = snapshot.typeCount
+    print("# 原剪贴板: \(snapshot.summary)")
+
+    board.clearContents()
+    board.setString("snippet 文本", forType: .string)
+    let ownership = board.changeCount
+    _ = snapshot.restore(to: board, ifUnchangedSince: ownership)
+
+    let restored = board.pasteboardItems ?? []
+    let restoredText = board.string(forType: .string) ?? "无"
+    let restoredImage = restored.first?.data(forType: .tiff) != nil
+    print("# 还原后: \(restored.count) 项, 文本=\(restoredText), 图片=\(restoredImage ? "在" : "丢了")")
+    // `string(forType:)` joins the items of a multi-item pasteboard with newlines, so compare
+    // by containment rather than equality (the first version of this test asserted equality and
+    // reported a false failure).
+    let textOK = restoredText.contains("原始文本") && restoredText.contains("第二项")
+    print("# 保真判定: \(restored.count == beforeItems && textOK && restoredImage ? "PASSED" : "FAILED")")
+
+    // 2) 归属守卫：借用期间别人写了新内容，还原必须让位
+    board.clearContents()
+    board.setString("snippet", forType: .string)
+    let ownership2 = board.changeCount
+    board.clearContents()
+    board.setString("用户期间新复制的内容", forType: .string)
+    _ = snapshot.restore(to: board, ifUnchangedSince: ownership2)
+    let kept = board.string(forType: .string) == "用户期间新复制的内容"
+    print("# 归属守卫（新内容不被覆盖）: \(kept ? "PASSED" : "FAILED")")
+
+    // 3) 真实剪贴板往返：净效果为还原，不改变用户现有内容
+    let general = NSPasteboard.general
+    let real = PasteboardSnapshot.capture(general)
+    general.clearContents()
+    general.setString("MacLauncher 临时占用", forType: .string)
+    let ownership3 = general.changeCount
+    let ok = real.restore(to: general, ifUnchangedSince: ownership3)
+    let after = PasteboardSnapshot.capture(general)
+    print("# 真实剪贴板往返: 还原=\(ok), 类型数 \(real.typeCount) -> \(after.typeCount), 一致=\(real.typeCount == after.typeCount ? "PASSED" : "FAILED")")
+    exit(0)
+}
+
 if let index = arguments.firstIndex(of: "--engine-set"), index + 3 < arguments.count {
     let engines = Config.setEngine(keyword: arguments[index + 1],
                                    name: arguments[index + 2],
