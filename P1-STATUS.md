@@ -736,3 +736,39 @@ let mode = text.contains("\n") ? "paste" : injectionMode
 
 **规程**：给 `Config` 增字段时，**先安装新构建再去改配置**（顺序反了就会出现这种"字段自己消失"）。
 验证方式：写入后重启 App，等待若干秒再查一次字段是否仍在——本次确认新构建下字段稳定 ✓。
+
+## 28. 剪贴板借用后归还原内容（2026-10-07）
+
+用户报：展开片段后，原来的剪贴板内容被片段内容覆盖了，希望用完自动还原。
+
+**查代码发现的问题比"被覆盖"更严重**——两处（`paste` 与 `pasteInPlace`）原本是这样写的：
+
+```swift
+let savedClipboard = pasteboard.string(forType: .string)   // 只保存纯文本一种类型
+pasteboard.clearContents(); pasteboard.setString(text, ...) // 覆盖
+... 0.4s 后 ...
+pasteboard.clearContents()
+if let savedClipboard = savedClipboard { pasteboard.setString(savedClipboard, ...) }
+```
+
+1. **只存了 `.string` 一种类型**：剪贴板里是图片、文件引用、RTF 或多项内容时，
+   还原时先 `clearContents()` 又什么都不写回 → **剪贴板变空**，原内容永久丢失；
+2. **没有归属守卫**：那 0.4 秒内若用户（或别的 App）复制了新内容，延迟还原会把新内容覆盖掉。
+
+**修法**（新增 `Sources/Pasteboard.swift`）：`PasteboardSnapshot` 保存**全部条目 × 全部类型**
+（每个 `NSPasteboardItem` 的每种 representation 都取 `data(forType:)`），
+还原前用 `changeCount` 判断"剪贴板是否仍是我们写的那一份"——不是就让位，新内容优先。
+两处调用统一用 `PaletteController.clipboardRestoreDelay`（0.4s）。
+
+**验证**：新增 `--clipboard-test`，三项断言：
+① 类型与多项保真（2 项 / 含 TIFF 图片）→ PASSED；
+② 归属守卫（借用期间写入新内容必须不被覆盖）→ PASSED；
+③ 真实剪贴板往返（类型数 4 → 4，净效果为还原）→ PASSED。
+类型保真测试跑在**自定义剪贴板**上，因此不动用户真实剪贴板（测完核对 `pbpaste` 内容未变）。
+
+**我自己在测试里犯的错**：第一版断言用 `string(forType: .string) == "原始文本"`，
+而多项剪贴板该调用会把各项用换行拼接 → 得到 `"原始文本\n第二项"`，于是报了**假 FAILED**；
+改为按包含关系判断后 PASSED。教训：断言多值 API 的返回值前，先确认它的聚合语义。
+
+**已知残留**：借用的 0.4 秒窗口内，若目标 App 极慢，理论上可能粘贴到已还原的旧内容；
+需要时可调大 `clipboardRestoreDelay`。
