@@ -71,10 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.expander.updateSnippets(updated.snippets)
             self.applyActivationPolicy()
 
-            // Re-register the global hotkey so a changed shortcut works without a restart.
-            let ok = HotKeyManager.shared.register(spec: updated.hotKey) { [weak self] in
-                self?.togglePalette()
-            }
+            // Re-register the global hotkeys so a changed shortcut works without a restart.
+            let ok = self.installHotKeys(updated)
             Log.write("configuration hot-applied (hotkey \(updated.hotKey): \(ok ? "ready" : "FAILED"))")
             guard ok else {
                 return "已保存，但热键 \(HotKey.display(spec: updated.hotKey)) 注册失败：可能已被其他 App 占用"
@@ -84,10 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // File search is delegated to Spotlight on demand; nothing enumerates folders
         // here, which is what used to block startup forever.
 
-        Log.write("step: registering hotkey")
-        let registered = HotKeyManager.shared.register(spec: config.hotKey) { [weak self] in
-            self?.togglePalette()
-        }
+        Log.write("step: registering hotkeys")
+        let registered = installHotKeys(config)
         Log.write("hotkey \(config.hotKey): \(registered ? "ready" : "FAILED (see above)")")
 
         Log.write("step: checking Accessibility permission for snippet pasting")
@@ -109,7 +105,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.applyActivationPolicy()
         }
 
-        if let index = CommandLine.arguments.firstIndex(of: "--render-stock") {
+        if CommandLine.arguments.contains(where: {
+            $0.hasPrefix("--render-") || $0.hasSuffix("-selftest") || $0 == "--screenshot-bench"
+        }) {
+            AppDelegate.isHeadlessRun = true
+        }
+
+        if let index = CommandLine.arguments.firstIndex(of: "--render-screenshot") {
+            let path = (index + 1 < CommandLine.arguments.count) ? CommandLine.arguments[index + 1] : "/tmp/shot.png"
+            let region = (index + 2 < CommandLine.arguments.count) ? CommandLine.arguments[index + 2] : nil
+            var selection = NSRect(x: 200, y: 300, width: 420, height: 260)
+            if let region = region {
+                let parts = region.split(separator: ",").compactMap { Double($0) }
+                if parts.count == 4 {
+                    selection = NSRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
+                }
+            }
+            let appearance: NSAppearance.Name = CommandLine.arguments.contains("--light") ? .aqua : .darkAqua
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                ScreenshotController.shared.renderToPNG(path: path, selection: selection,
+                                                        appearanceName: appearance)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
+            }
+        } else if let index = CommandLine.arguments.firstIndex(of: "--render-stock") {
             let path = (index + 1 < CommandLine.arguments.count) ? CommandLine.arguments[index + 1] : "/tmp/stock.png"
             let symbol = (index + 2 < CommandLine.arguments.count) ? CommandLine.arguments[index + 2] : nil
             let appearance: NSAppearance.Name = CommandLine.arguments.contains("--light") ? .aqua : .darkAqua
@@ -118,6 +136,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 StockWindowController.shared.renderToPNG(path: path, symbol: symbol,
                                                         appearanceName: appearance, mode: mode)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { NSApp.terminate(nil) }
+            }
+        } else if CommandLine.arguments.contains("--memory-profile") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                self.runMemoryProfile()
+                NSApp.terminate(nil)
+            }
+        } else if CommandLine.arguments.contains("--screenshot-bench") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                ScreenshotController.shared.benchmark(steps: 300)
+                NSApp.terminate(nil)
+            }
+        } else if CommandLine.arguments.contains("--palette-cmd-enter-selftest") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                let passed = self.palette.selfTestCommandReturn()
+                print("palette ⌘↩ selftest: \(passed ? "PASSED" : "FAILED")")
+                NSApp.terminate(nil)
+            }
+        } else if CommandLine.arguments.contains("--screenshot-selftest") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                let passed = ScreenshotController.shared.selfTest()
+                print("screenshot selftest: \(passed ? "PASSED" : "FAILED")")
+                NSApp.terminate(nil)
             }
         } else if CommandLine.arguments.contains("--stock-selftest") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
@@ -186,7 +226,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Quitting is the one action that leaves the user with a dead launcher, and ⌘Q is easy
     /// to hit while the settings window is open. So it asks first, and on confirmation takes
     /// the LaunchAgent down too — otherwise launchd (KeepAlive) would bring it straight back.
+    /// Set by headless review/self-test runs. Those must not wait for a confirmation dialog
+    /// (nothing can answer it, so the process hangs — measured) and must not boot out the
+    /// user's launch agent while doing so.
+    static var isHeadlessRun = false
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !AppDelegate.isHeadlessRun else {
+            Log.write("headless run: terminating without confirmation and without booting out the agent")
+            return .terminateNow
+        }
         let alert = NSAlert()
         alert.messageText = "退出 MacLauncher？"
         alert.informativeText = "退出后热键与片段自动展开都会停止，需要重新打开 App 才能恢复。"
@@ -312,8 +361,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    /// Registers every global hotkey in one place: adding a second combination used to mean
+    /// editing two separate call sites, which is how one of them gets forgotten.
+    @discardableResult
+    private func installHotKeys(_ config: Config) -> Bool {
+        let paletteOK = HotKeyManager.shared.register(name: "palette", spec: config.hotKey) { [weak self] in
+            self?.togglePalette()
+        }
+        let screenshotOK = HotKeyManager.shared.register(name: "screenshot",
+                                                         spec: config.screenshotHotKey) { [weak self] in
+            self?.takeScreenshot()
+        }
+        Log.write("hotkeys: palette=\(config.hotKey):\(paletteOK ? "ready" : "FAILED"), "
+                  + "screenshot=\(config.screenshotHotKey):\(screenshotOK ? "ready" : "FAILED")")
+        return paletteOK
+    }
+
+    @objc private func takeScreenshot() {
+        ScreenshotController.shared.begin()
+    }
+
     /// A real main menu matters in `showInDock` mode: without an Edit menu the search
     /// field cannot paste, and the menu bar would be empty while the app is active.
+    /// Reports resident memory at each step of the flows that allocate the most, so the
+    /// numbers decide what to optimise instead of a guess.
+    private func runMemoryProfile() {
+        func mb() -> String {
+            var info = mach_task_basic_info()
+            var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+            let result = withUnsafeMutablePointer(to: &info) { pointer in
+                pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { rebound in
+                    task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), rebound, &count)
+                }
+            }
+            guard result == KERN_SUCCESS else { return "?" }
+            return String(format: "%.0f MB", Double(info.resident_size) / 1024 / 1024)
+        }
+        func report(_ text: String) {
+            print(text)
+            fflush(stdout)   // the profiler is often killed by a timeout; do not lose the numbers
+        }
+        func settle(_ seconds: TimeInterval) {
+            let deadline = Date().addingTimeInterval(seconds)
+            while Date() < deadline {
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+            }
+        }
+
+        report("  启动后(索引+片段+状态栏): \(mb())")
+        settle(0.5)
+
+        ScreenshotController.shared.begin(preselect: NSRect(x: 200, y: 200, width: 400, height: 300))
+        settle(0.8)
+        report("  截图浮层打开(含整屏位图): \(mb())")
+        ScreenshotController.shared.cancelForProfile()
+        settle(1.0)
+        report("  浮层关闭后:            \(mb())")
+
+        palette.show()
+        settle(0.8)
+        report("  调色板打开:            \(mb())")
+        palette.hide(restoringFocus: false)
+        settle(0.8)
+        report("  调色板关闭后:          \(mb())")
+
+        StockWindowController.shared.show(symbol: nil)
+        settle(2.5)
+        report("  自选窗口打开(含行情):   \(mb())")
+        StockWindowController.shared.closeForProfile()
+        settle(1.0)
+        report("  自选窗口关闭后:        \(mb())")
+
+        // Leak check: RSS that grows linearly with open/close cycles is a leak; a plateau that
+        // rises once and then stays flat is just the allocator holding freed pages.
+        var readings: [String] = []
+        for _ in 0..<5 {
+            ScreenshotController.shared.begin(preselect: NSRect(x: 200, y: 200, width: 400, height: 300))
+            settle(0.7)
+            ScreenshotController.shared.cancelForProfile()
+            settle(0.7)
+            readings.append(mb())
+        }
+        print("  浮层开关 5 轮后:        \(readings.joined(separator: " -> "))")
+    }
+
     private func installMainMenu() {
         let mainMenu = NSMenu()
 

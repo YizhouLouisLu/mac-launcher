@@ -43,8 +43,11 @@ final class SnippetExpander {
 
     /// The snippet whose keyword ends the buffer, preferring the longest keyword.
     static func match(snippets: [Snippet], buffer: String) -> Snippet? {
-        expandable(snippets)
-            .filter { !$0.keyword.isEmpty && buffer.hasSuffix($0.keyword) }
+        // Case-insensitive: typing `\MCAL` must expand the `\mcal` snippet. Only the case can
+        // differ, so the keyword still has the same length and the backspace count stays right.
+        let lowered = buffer.lowercased()
+        return expandable(snippets)
+            .filter { !$0.keyword.isEmpty && lowered.hasSuffix($0.keyword.lowercased()) }
             .sorted { $0.keyword.count > $1.keyword.count }
             .first
     }
@@ -128,7 +131,7 @@ final class SnippetExpander {
 
     private func expand(_ snippet: Snippet) {
         guard !isPaletteVisible() else { return }
-        guard buffer.hasSuffix(snippet.keyword) else { return }
+        guard buffer.lowercased().hasSuffix(snippet.keyword.lowercased()) else { return }
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == bufferApp?.processIdentifier else {
             Log.write("expansion abandoned: frontmost application changed")
             buffer = ""

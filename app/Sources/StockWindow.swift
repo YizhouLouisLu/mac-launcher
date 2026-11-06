@@ -388,6 +388,9 @@ final class StockWindowController: NSObject, NSTableViewDataSource, NSTableViewD
     /// The view the offscreen review renderer should draw.
     private(set) var renderView: NSView?
 
+    /// Used by the memory profile to close the window without user input.
+    func closeForProfile() { close() }
+
     // MARK: - review + regression
 
     func renderToPNG(path: String, symbol: String?, appearanceName: NSAppearance.Name,

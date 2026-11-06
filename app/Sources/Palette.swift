@@ -110,6 +110,35 @@ final class PaletteController: NSObject {
     /// the target application to service the Cmd+V, short enough that the user does not notice.
     static let clipboardRestoreDelay: TimeInterval = 0.4
 
+    /// A web row that only shows the engine keyword ("用 Google 搜索…") is a prompt, not an
+    /// action: Return there should behave like typing a space — seed `keyword ` and stay in the
+    /// field so the query can be typed. Rows that already carry a query keep opening the site,
+    /// otherwise there would be no keyboard way to run the search at all.
+    static func webPromptKeyword(for item: Item, fieldText: String) -> String? {
+        guard item.kind == .webSearch, let keyword = item.alternateTitles.first, !keyword.isEmpty else {
+            return nil
+        }
+        return fieldText.trimmed().lowercased() == keyword.lowercased() ? keyword : nil
+    }
+
+    /// What Return does on the selected row, for the footer hint.
+    static func returnHint(for kind: ItemKind) -> String {
+        kind == .webSearch ? "↵ 输入搜索内容" : "↵ 打开"
+    }
+
+    /// Footer hint for the ⌘↩ modifier: it depends on the selected row's kind.
+    static func commandHint(for kind: ItemKind) -> String {
+        switch kind {
+        case .file, .folder: return "⌘↩ 在访达中显示"
+        default: return "⌘↩ 强制退出"
+        }
+    }
+
+    /// Slots held back from the instant paint so late-arriving file results can be appended
+    /// without truncation. The stable merge never displaces a row already on screen, so filling
+    /// every slot first would make file search invisible for broad queries.
+    static let fileResultReserve = 4
+
     /// Height of the dictionary gloss strip under the search field, when shown.
     static let glossHeight: CGFloat = 34
     static let cornerRadius: CGFloat = 14
@@ -141,11 +170,14 @@ final class PaletteController: NSObject {
     /// Stock rows live apart from the app/file results so the async refresh can
     /// replace them without disturbing the merged list underneath.
     private var stockItems: [Item] = []
+    /// Captures ⌘↩ while the palette is visible. The field editor does not reliably turn that
+    /// combination into `insertNewline:`, which is why the file-reveal shortcut looked dead.
+    private var commandReturnMonitor: Any?
     private var stockSearchGeneration = 0
     /// True while Up/Down are stepping through query history instead of rows.
     private var browsingHistory = false
     private let footerLabel = NSTextField(labelWithString: "")
-    private let hintLabel = NSTextField(labelWithString: "↑↓ 选择   ↵ 打开   ⎋ 关闭")
+    private let hintLabel = NSTextField(labelWithString: "")
     private let searchField = NSTextField()
     private let scrollView = NSScrollView()
     private let tableView = NSTableView()
@@ -170,6 +202,7 @@ final class PaletteController: NSObject {
         // Clicking anywhere outside the palette (another app, the desktop, the menu bar)
         // makes the panel resign key; that is the signal to dismiss it. Until now the only
         // way out was Esc.
+        installCommandReturnMonitor()
         NotificationCenter.default.addObserver(self,
                                                selector: #selector(panelDidResignKey),
                                                name: NSWindow.didResignKeyNotification,
@@ -184,6 +217,22 @@ final class PaletteController: NSObject {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         if app.bundleIdentifier != Bundle.main.bundleIdentifier {
             lastOtherApp = app
+        }
+    }
+
+    /// ⌘↩ never reached the field editor's command handling, so the shortcut did nothing — for
+    /// force-quitting applications just as much as for revealing files. A local monitor sees the
+    /// event first, while the palette is visible, and consumes it.
+    private func installCommandReturnMonitor() {
+        guard commandReturnMonitor == nil else { return }
+        commandReturnMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self, self.panel.isVisible else { return event }
+            // 36 = Return, 76 = keypad Enter.
+            guard event.keyCode == 36 || event.keyCode == 76,
+                  event.modifierFlags.contains(.command) else { return event }
+            Log.write("⌘↩ monitor: command+return while palette visible")
+            self.perform(self.selectedItem, forceQuit: true)
+            return nil
         }
     }
 
@@ -405,6 +454,84 @@ final class PaletteController: NSObject {
         tableView.tableColumns.first?.width = width
     }
 
+    // MARK: - regression self-test
+
+    /// Regression test for "⌘↩ does nothing": checks the two links that can break —
+    /// ① the local monitor actually intercepts ⌘↩ while the palette is visible (without a
+    /// selection, so it cannot quit or launch anything), and ② `perform` routes a file item to
+    /// the reveal branch. A Finder window opens once for /tmp as a side effect.
+    func selfTestCommandReturn() -> Bool {
+        var passed = true
+
+        // ① routing: a query with no matches leaves no selection to act on.
+        show()
+        // Quit mode: no web-search row is offered there, so an empty result leaves nothing
+        // selected and the monitor cannot launch or quit anything.
+        searchField.stringValue = "q zzzqqq-no-such-thing-12345"
+        reloadResults()
+        let settle = Date().addingTimeInterval(0.5)
+        while Date() < settle {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        let selected = selectedItem
+        guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero,
+                                           modifierFlags: .command,
+                                           timestamp: ProcessInfo.processInfo.systemUptime,
+                                           windowNumber: panel.windowNumber, context: nil,
+                                           characters: "\r", charactersIgnoringModifiers: "\r",
+                                           isARepeat: false, keyCode: 36) else { return false }
+        NSApp.sendEvent(event)
+        let pump = Date().addingTimeInterval(0.4)
+        while Date() < pump {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        Log.write("⌘↩ selftest: monitor path sent, selection was \(selected?.title ?? "none")")
+
+        // ①b Return on a bare engine keyword row must seed "keyword " and stay open.
+        show()
+        searchField.stringValue = "g"
+        reloadResults()
+        let settleB = Date().addingTimeInterval(0.3)
+        while Date() < settleB {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        if let webRow = results.firstIndex(where: { $0.kind == .webSearch }) {
+            tableView.selectRowIndexes(IndexSet(integer: webRow), byExtendingSelection: false)
+            if let returnEvent = NSEvent.keyEvent(with: .keyDown, location: .zero,
+                                                  modifierFlags: [],
+                                                  timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: panel.windowNumber, context: nil,
+                                                  characters: "\r", charactersIgnoringModifiers: "\r",
+                                                  isARepeat: false, keyCode: 36) {
+                NSApp.sendEvent(returnEvent)
+            }
+            let settleC = Date().addingTimeInterval(0.3)
+            while Date() < settleC {
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+            }
+            let caret = searchField.currentEditor()?.selectedRange
+            let text = searchField.stringValue
+            let seeded = text == "g " && panel.isVisible
+                && caret?.location == 2 && caret?.length == 0
+            Log.write("↵ selftest: field=\"\(text)\" visible=\(panel.isVisible) "
+                      + "caret=\(caret.map { "\($0.location)/\($0.length)" } ?? "none") -> \(seeded)")
+            if !seeded { passed = false }
+        } else {
+            Log.write("↵ selftest: no web row for a bare keyword")
+            passed = false
+        }
+
+        // ② the file branch itself, called directly so the outcome is unambiguous.
+        let fileItem = Item(title: "selftest.txt", subtitle: "", path: "/tmp/selftest.txt", kind: .file)
+        perform(fileItem, forceQuit: true)
+        let after = Date().addingTimeInterval(0.3)
+        while Date() < after {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
+        }
+        Log.write("⌘↩ selftest: file branch invoked")
+        return passed
+    }
+
     // MARK: - offscreen rendering (UI review)
 
     /// Renders the panel to a PNG so the layout can be reviewed without Screen Recording
@@ -475,7 +602,12 @@ final class PaletteController: NSObject {
         refreshGloss(for: query)
         appResults = indexer.searchApps(rawQuery: query, config: config)
         stockItems = cachedStockItems(for: query)
-        results = withStocks(appResults)
+        // Hold back a few slots for the Spotlight answer that lands a moment later: the stable
+        // merge never displaces a row already on screen, so without the reserve a broad query
+        // that fills the list would never show any file at all.
+        let reserve = query.trimmed().isEmpty ? 0 : PaletteController.fileResultReserve
+        let paintCount = Indexer.instantPaintCount(maxResults: config.maxResults, reserve: reserve)
+        results = withStocks(Array(appResults.prefix(paintCount)))
         refreshTable()
         scheduleFileSearch(for: query)
         scheduleStockSearch(for: query)
@@ -522,8 +654,14 @@ final class PaletteController: NSObject {
                     // be a conditional binding on a non-optional (compiler error).
                     guard self.stockSearchGeneration == generation,
                           Indexer.stockQuery(for: self.searchField.stringValue) == term else { return }
+                    let previous = self.stockItems
                     self.stockItems = items
-                    self.results = self.withStocks(self.appResults)
+                    // First arrival: insert at the top (the user asked for stocks). Later
+                    // refreshes replace the existing stock rows in place.
+                    self.results = previous.isEmpty
+                        ? self.withStocks(self.appResults)
+                        : Indexer.replacingStockRows(in: self.results, with: items,
+                                                     limit: self.config.maxResults)
                     self.refreshTable()
                     Log.write("stock search \"\(term)\": \(hits.count) hits, \(quotes.count) quotes")
                 }
@@ -554,7 +692,9 @@ final class PaletteController: NSObject {
                                                     apps: self.appResults,
                                                     filePaths: paths,
                                                     config: self.config)
-                    self.results = self.withStocks(merged)
+                    self.results = Indexer.stableResults(existing: self.results,
+                                                         incoming: self.withStocks(merged),
+                                                         limit: self.config.maxResults)
                     self.refreshTable()
                     Log.write("file search \"\(trimmed)\": \(paths.count) spotlight hits, \(merged.count) merged rows")
                 }
@@ -590,6 +730,14 @@ final class PaletteController: NSObject {
     private func refreshTable() {
         tableView.reloadData()
         emptyLabel.isHidden = !results.isEmpty
+        let selectedKind = (tableView.selectedRow >= 0 && tableView.selectedRow < results.count)
+            ? results[tableView.selectedRow].kind : nil
+        hintLabel.stringValue = "↑↓ 选择   "
+            + (selectedKind.map { PaletteController.returnHint(for: $0) } ?? "↵ 打开")
+            + "   "
+            + (selectedKind.map { PaletteController.commandHint(for: $0) } ?? "⌘↩ 强制退出")
+            + "   ⎋ 关闭"
+
         var footer = results.isEmpty ? "" : "\(results.count) 个结果"
         if searchField.stringValue.trimmed().isEmpty, QueryHistory.shared.hasEntries {
             footer += footer.isEmpty ? "↑ 调出上一次查询" : "  ·  ↑ 调出上一次查询"
@@ -612,6 +760,18 @@ final class PaletteController: NSObject {
         let next = max(0, min(results.count - 1, base + delta))
         tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
         tableView.scrollRowToVisible(next)
+        updateHintForSelection()
+    }
+
+    /// The ⌘↩ hint depends on what is selected, so it has to follow the selection.
+    private func updateHintForSelection() {
+        let row = tableView.selectedRow
+        let kind = (row >= 0 && row < results.count) ? results[row].kind : nil
+        hintLabel.stringValue = "↑↓ 选择   "
+            + (kind.map { PaletteController.returnHint(for: $0) } ?? "↵ 打开")
+            + "   "
+            + (kind.map { PaletteController.commandHint(for: $0) } ?? "⌘↩ 强制退出")
+            + "   ⎋ 关闭"
     }
 
     private var selectedItem: Item? {
@@ -629,6 +789,25 @@ final class PaletteController: NSObject {
             NSSound.beep()
             return
         }
+        // A bare engine keyword row is a prompt: Return seeds "keyword " and keeps the palette
+        // open, exactly as typing a space would have. This has to happen before hide() below,
+        // or the field would be gone by the time we seed it.
+        if !forceQuit, let keyword = PaletteController.webPromptKeyword(for: item,
+                                                                       fieldText: searchField.stringValue) {
+            Log.write("web prompt → \"\(keyword) \" (stay in field)")
+            // Order matters: becoming first responder selects the whole field, so the caret must
+            // be placed *after* that. Setting it before was why the keyword stayed selected and
+            // the next keystroke replaced it.
+            panel.makeFirstResponder(searchField)
+            let seeded = keyword + " "
+            searchField.stringValue = seeded
+            if let editor = searchField.currentEditor() {
+                editor.selectedRange = NSRange(location: (seeded as NSString).length, length: 0)
+            }
+            reloadResults()
+            return
+        }
+
         QueryHistory.shared.record(searchField.stringValue)
         let shouldQuit = forceQuit || Indexer.quitMode(for: searchField.stringValue)
         // The paste target is whoever was frontmost before the palette; hide() clears it.
@@ -646,6 +825,18 @@ final class PaletteController: NSObject {
             Log.write("snippet \"\(item.title)\" (\(content.count) chars) -> \(pasteTarget?.localizedName ?? "frontmost app")")
             Paster.paste(content, into: pasteTarget) { outcome in
                 Log.write("snippet outcome: \(outcome)")
+            }
+            return
+        }
+
+        // ⌘↩ means "force quit" for applications, but for a file or folder the useful action is
+        // revealing it in Finder — the modifier only ever meant force-quit because the earlier
+        // build had no file-specific command.
+        if forceQuit, item.kind == .file || item.kind == .folder {
+            let path = item.path
+            Log.write("reveal in Finder: \(path)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
             }
             return
         }

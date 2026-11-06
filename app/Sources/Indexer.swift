@@ -284,6 +284,63 @@ final class Indexer {
         return isChinese ? "用\(engineName)\(suffix)" : "用 \(engineName) \(suffix)"
     }
 
+    /// How many rows the instant paint may show: the total minus the slots held back for the
+    /// late Spotlight answer. At least one row is always shown.
+    static func instantPaintCount(maxResults: Int, reserve: Int) -> Int {
+        max(1, maxResults - max(0, reserve))
+    }
+
+    /// Stable merge: rows already on screen keep their index, only genuinely new rows are
+    /// appended (in their ranked order).
+    ///
+    /// The palette paints application matches immediately and lets Spotlight answer a few
+    /// hundred milliseconds later. Merging that answer by rank used to insert file rows in the
+    /// middle of the list, so a row could move out from under the selection — the user's
+    /// complaint. Ranking now only orders the arrivals among themselves.
+    static func stableResults(existing: [Item], incoming: [Item], limit: Int) -> [Item] {
+        guard !existing.isEmpty else { return Array(incoming.prefix(limit)) }
+        var result = existing
+        var seen = Set(result.map(identityKey))
+        for item in incoming {
+            let key = identityKey(item)
+            guard seen.insert(key).inserted else { continue }
+            result.append(item)
+        }
+        // Rows that no longer match disappear in place; transient file rows are the only ones
+        // dropped, so a rank change alone never removes an application or action row.
+        let incomingKeys = Set(incoming.map(identityKey))
+        result.removeAll { $0.kind == .file && !incomingKeys.contains(identityKey($0)) }
+        return Array(result.prefix(limit))
+    }
+
+    /// Identity used for the stable merge: two rows are "the same row" when they point at the
+    /// same thing, regardless of the score they happened to receive.
+    static func identityKey(_ item: Item) -> String {
+        "\(item.kind.rawValue)|\(item.title)|\(item.path)|\(item.url ?? "")"
+    }
+
+    /// Swaps the stock rows for new ones **at the position they already occupy**, so a late
+    /// quote refresh does not move the list either. Any extra rows are appended.
+    static func replacingStockRows(in existing: [Item], with fresh: [Item], limit: Int) -> [Item] {
+        guard !fresh.isEmpty else { return existing }
+        guard let firstStock = existing.firstIndex(where: { $0.kind == .stock }) else {
+            return Array((existing + fresh).prefix(limit))
+        }
+        var result: [Item] = []
+        var inserted = false
+        for item in existing {
+            if item.kind == .stock {
+                if !inserted {
+                    result.append(contentsOf: fresh)
+                    inserted = true
+                }
+                continue
+            }
+            result.append(item)
+        }
+        return Array(result.prefix(limit))
+    }
+
     /// Strips `{query}` from a template to get the engine's own search page, dropping the
     /// dangling `?`/`&`/`=` that would otherwise be left behind.
     static func engineBaseURL(_ template: String) -> String? {

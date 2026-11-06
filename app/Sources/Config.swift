@@ -30,6 +30,11 @@ struct Config: Codable {
     var snippets: [Snippet]
     /// Alfred-style in-place expansion while typing in any application.
     var autoExpandSnippets: Bool
+    /// Global hotkey for the screenshot overlay.
+    var screenshotHotKey: String
+    /// Where ⌘S saves by default.
+    var screenshotSaveFolder: String
+
     /// Engine used for plain queries (no keyword typed); empty disables the row.
     var defaultEngineKeyword: String
 
@@ -40,7 +45,7 @@ struct Config: Codable {
     var snippetInjection: String
 
     enum CodingKeys: String, CodingKey {
-        case searchFolders, searchHomeFolder, maxResults, hotKey, showInDock, engines, snippets, autoExpandSnippets, snippetInjection, stockWatchlist, defaultEngineKeyword
+        case searchFolders, searchHomeFolder, maxResults, hotKey, showInDock, engines, snippets, autoExpandSnippets, snippetInjection, stockWatchlist, defaultEngineKeyword, screenshotHotKey, screenshotSaveFolder
     }
 
     init() {
@@ -69,6 +74,8 @@ struct Config: Codable {
         autoExpandSnippets = true
         snippetInjection = "type"
         defaultEngineKeyword = "g"
+        screenshotHotKey = "option+j"
+        screenshotSaveFolder = "~/Desktop"
     }
 
     /// Folders handed to `mdfind -onlyin`: the home directory (unless disabled) plus the
@@ -101,6 +108,8 @@ struct Config: Codable {
         snippetInjection = (try? container.decode(String.self, forKey: .snippetInjection)) ?? fallback.snippetInjection
         stockWatchlist = (try? container.decode([String].self, forKey: .stockWatchlist)) ?? fallback.stockWatchlist
         defaultEngineKeyword = (try? container.decode(String.self, forKey: .defaultEngineKeyword)) ?? fallback.defaultEngineKeyword
+        screenshotHotKey = (try? container.decode(String.self, forKey: .screenshotHotKey)) ?? fallback.screenshotHotKey
+        screenshotSaveFolder = (try? container.decode(String.self, forKey: .screenshotSaveFolder)) ?? fallback.screenshotSaveFolder
     }
 
     // MARK: - watchlist

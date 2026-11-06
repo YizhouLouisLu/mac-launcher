@@ -165,52 +165,73 @@ enum HotKey {
 final class HotKeyManager {
     static let shared = HotKeyManager()
 
-    private var hotKeyRef: EventHotKeyRef?
+    /// One slot per named hotkey: the palette and the screenshot overlay each need their own
+    /// combination, and the Carbon handler has to tell them apart (the earlier version held a
+    /// single ref, a single action and a fixed id).
+    private struct Registration {
+        let ref: EventHotKeyRef
+        let spec: String
+        let action: () -> Void
+    }
+
+    private var registrations: [String: Registration] = [:]
+    private var idsByName: [String: UInt32] = [:]
+    private var namesByID: [UInt32: String] = [:]
+    private var lastSpecs: [String: String] = [:]
+    private var lastActions: [String: () -> Void] = [:]
+    private var nextID: UInt32 = 1
     private var eventHandlerInstalled = false
-    private var action: (() -> Void)?
-    private var lastSpec: String?
 
     private init() {}
 
     @discardableResult
-    func register(spec: String, action: @escaping () -> Void) -> Bool {
-        self.action = action
+    func register(name: String = "palette", spec: String, action: @escaping () -> Void) -> Bool {
         installEventHandlerIfNeeded()
 
         guard let parsed = HotKey.parse(spec: spec) else {
             Log.write("hotkey spec \"\(spec)\" not understood; falling back to option+space")
-            return register(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey), label: "option+space")
+            return register(name: name, keyCode: UInt32(kVK_Space),
+                            modifiers: UInt32(optionKey), label: "option+space", action: action)
         }
-        return register(keyCode: UInt32(parsed.keyCode), modifiers: UInt32(parsed.modifiers), label: spec)
+        return register(name: name, keyCode: UInt32(parsed.keyCode),
+                        modifiers: UInt32(parsed.modifiers), label: spec, action: action)
     }
 
     /// Frees the combination while the recorder captures a new one.
-    func suspend() {
-        if let existing = hotKeyRef {
-            UnregisterEventHotKey(existing)
-            hotKeyRef = nil
-            Log.write("hotkey suspended")
-        }
+    func suspend(name: String = "palette") {
+        guard let existing = registrations.removeValue(forKey: name) else { return }
+        UnregisterEventHotKey(existing.ref)
+        Log.write("hotkey \(name) suspended")
     }
 
     /// Restores whatever was last registered successfully.
-    func resume() {
-        guard let spec = lastSpec else { return }
-        register(spec: spec, action: action ?? {})
+    func resume(name: String = "palette") {
+        guard let spec = lastSpecs[name] else { return }
+        register(name: name, spec: spec, action: lastActions[name] ?? {})
     }
 
-    private func register(keyCode: UInt32, modifiers: UInt32, label: String) -> Bool {
-        if let existing = hotKeyRef {
-            UnregisterEventHotKey(existing)
-            hotKeyRef = nil
+    private func register(name: String, keyCode: UInt32, modifiers: UInt32,
+                          label: String, action: @escaping () -> Void) -> Bool {
+        if let existing = registrations.removeValue(forKey: name) {
+            UnregisterEventHotKey(existing.ref)
         }
+        let id: UInt32
+        if let known = idsByName[name] {
+            id = known
+        } else {
+            id = nextID
+            nextID += 1
+            idsByName[name] = id
+        }
+        namesByID[id] = name
         var ref: EventHotKeyRef?
-        let hotKeyID = EventHotKeyID(signature: OSType(0x4D4C4E43), id: 1) // 'MLNC'
+        let hotKeyID = EventHotKeyID(signature: OSType(0x4D4C4E43), id: id) // 'MLNC'
         let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetApplicationEventTarget(), 0, &ref)
-        if status == noErr {
-            hotKeyRef = ref
-            lastSpec = label
-            Log.write("hotkey registered: \(label)")
+        if status == noErr, let ref = ref {
+            registrations[name] = Registration(ref: ref, spec: label, action: action)
+            lastSpecs[name] = label
+            lastActions[name] = action
+            Log.write("hotkey registered: \(label) (name=\(name) id=\(id))")
             return true
         }
         if status == eventHotKeyExistsErr {
@@ -221,7 +242,14 @@ final class HotKeyManager {
         return false
     }
 
-    fileprivate func fire() { action?() }
+    /// Called by the Carbon handler with the id carried by the event.
+    fileprivate func fire(id: UInt32) {
+        guard let name = namesByID[id], let registration = registrations[name] else {
+            Log.write("hotkey pressed with unknown id \(id)")
+            return
+        }
+        registration.action()
+    }
 
     private func installEventHandlerIfNeeded() {
         guard !eventHandlerInstalled else { return }
@@ -241,6 +269,14 @@ final class HotKeyManager {
 private func hotKeyEventHandler(_ callRef: EventHandlerCallRef?,
                                _ event: EventRef?,
                                _ userData: UnsafeMutableRawPointer?) -> OSStatus {
-    HotKeyManager.shared.fire()
+    // The id says which combination fired; the older handler ignored it and called the single
+    // stored action, which cannot work once a second hotkey exists.
+    var hotKeyID = EventHotKeyID()
+    if let event = event {
+        GetEventParameter(event, EventParamName(kEventParamDirectObject),
+                          EventParamType(typeEventHotKeyID), nil,
+                          MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
+    }
+    HotKeyManager.shared.fire(id: hotKeyID.id)
     return noErr
 }
