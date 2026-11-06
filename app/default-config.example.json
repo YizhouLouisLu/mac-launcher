@@ -50,6 +50,8 @@
   ],
   "hotKey": "option+space",
   "maxResults": 12,
+  "screenshotHotKey": "option+j",
+  "screenshotSaveFolder": "~/Desktop",
   "searchFolders": [
     "~/Desktop",
     "~/Documents",
